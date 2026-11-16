@@ -1,0 +1,13 @@
+# Game data never goes in the repository: the app reads it from your own ROM.
+*.nds
+*.srl
+*.sav
+build/
+.gradle/
+.cxx/
+local.properties
+*.apk
+*.aab
+/app/build/
+.idea/
+*.iml
