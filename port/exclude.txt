@@ -12,13 +12,10 @@ libs/NitroSDK/init/
 libs/NitroSDK/os/src/alarm_timer.c
 libs/NitroSDK/os/src/arena_cache_init.c
 libs/NitroSDK/os/src/exception_context_display.c
-libs/NitroSDK/os/src/irq_wait_handler.c
 libs/NitroSDK/os/src/lock_word_and_bus_ownership.c
 libs/NitroSDK/os/src/memory_protection.c
 libs/NitroSDK/os/src/reset_interrupts_halt.c
 libs/NitroSDK/os/src/thread_context_init.c
-libs/NitroSDK/os/src/thread_scheduler.c
-libs/NitroSDK/os/src/thread_sync_and_console_info.c
 libs/NitroSDK/os/src/tick_counter.c
 libs/NitroSDK/os/src/vblank_alarm_init.c
 

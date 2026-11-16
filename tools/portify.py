@@ -37,8 +37,13 @@ STRIP_FUNCS = {
                                 "StartDmaTransferAndChannel0DummyWithoutIrqDisable"],
     # Writes geometry commands through pointers to the command registers.
     "src/Main/Graphics/stem_sets.c": ["DrawTimedQuad"],
-    # Interrupt dispatch written for the ARM9's IRQ mode.
-    "src/ITCM/model_draw_and_irq_handler.c": [],
+    # Context switching: the platform layer runs each OS thread on a host thread (port/platform/os.c).
+    # Overlays are linked into the program; loading one restores its data (port/platform/overlay.c).
+    "libs/NitroSDK/fs/src/overlay_rom_loader.c": ["FS_ClearOverlayImage", "FS_LoadOverlayImageAsync",
+                                                  "FS_LoadOverlayImage", "FS_StartOverlay"],
+    "src/Main/Net/slot_result_sync.c": ["IsInOverlayRange"],
+    "libs/NitroSDK/os/src/thread_scheduler.c": ["OS_InitThread", "OS_CreateThread", "OSi_ExitThread_ArgSpecified",
+                                                "OSi_ExitThread_Destroy", "OSi_RescheduleThread"],
 }
 
 # Registers whose writes have side effects: `reg_X = v;` (and |=, &=) become `PORT_IO_WRITE(reg_X, v);`, which the
@@ -199,7 +204,7 @@ def main():
         header = f'#line 1 "{rel}"\n'
         if ov:
             used_overlays.add(ov)
-            header = (f'#pragma clang section data="{ov}_data" bss="{ov}_bss"\n') + header
+            header = (f'#pragma clang section text="{ov}_text" rodata="{ov}_rodata" data="{ov}_data" bss="{ov}_bss"\n') + header
         dst = out / "src" / rel
         write_if_changed(dst, header + text)
         sources.append(dst.as_posix())
