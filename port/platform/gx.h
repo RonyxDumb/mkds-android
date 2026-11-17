@@ -46,6 +46,7 @@ typedef struct Gx3dFrame {
     uint16_t edge_color[8];
     uint16_t toon_table[32];
     uint8_t alpha_ref;
+    int32_t proj_aspect; // aspect ratio of the projection of the first polygon, 20.12 (0: none)
     uint64_t serial; // increases with every list
 } Gx3dFrame;
 

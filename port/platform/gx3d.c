@@ -236,6 +236,13 @@ static void emit_polygon(const GxVertex *v, int count) {
     p->teximage = G.teximage;
     p->pltt = G.pltt;
     p->tag = G.draw_tag;
+    if (!f->proj_aspect) {
+        // The width of the view the projection maps to the screen, relative to its height: wider than 4:3 when the
+        // game projects the widescreen view (g_port_aspect).
+        int64_t sx = G.proj.m[0] < 0 ? -(int64_t) G.proj.m[0] : G.proj.m[0];
+        int64_t sy = G.proj.m[5] < 0 ? -(int64_t) G.proj.m[5] : G.proj.m[5];
+        f->proj_aspect = sx ? (int32_t) (sy * 4096 / sx) : 0x1555;
+    }
     memcpy(&f->vertices[f->vertex_count], v, sizeof(GxVertex) * count);
     f->vertex_count += count;
 }
@@ -710,6 +717,7 @@ void gx3d_vblank(void) {
     G.building ^= 1;
     Gx3dFrame *next = building();
     next->polygon_count = 0;
+    next->proj_aspect = 0;
     next->vertex_count = 0;
     G.draw_tag = 0;
     update_gxstat();

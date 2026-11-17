@@ -36,16 +36,19 @@ static const char *FS_COMPOSE =
     "uniform sampler2D layer3d;\n"
     "uniform int bright_mode;\n"
     "uniform float bright;\n"
-    "uniform float wide;\n"      // the 3D layer is this many times wider than the 4:3 2D layers, centred on it
+    // The screen is k2 times as wide as the 2D layers and k3 times as wide as the 3D layer, both centred.
+    "uniform float k2;\n"
+    "uniform float k3;\n"
     "uniform vec3 backdrop;\n"
     "in vec2 v_uv;\n"
     "out vec4 color;\n"
     "void main() {\n"
-    "  vec2 uv2 = vec2((v_uv.x - 0.5) * wide + 0.5, v_uv.y);\n"
+    "  vec2 uv2 = vec2((v_uv.x - 0.5) * k2 + 0.5, v_uv.y);\n"
     "  bool inside = uv2.x >= 0.0 && uv2.x <= 1.0;\n"
     "  vec4 up = inside ? texture(above, uv2) : vec4(0.0);\n"
     "  vec4 dn = inside ? texture(below, uv2) : vec4(backdrop, 1.0);\n"
-    "  vec4 d3 = texture(layer3d, vec2(v_uv.x, 1.0 - v_uv.y));\n"
+    "  float u3 = (v_uv.x - 0.5) * k3 + 0.5;\n"
+    "  vec4 d3 = u3 >= 0.0 && u3 <= 1.0 ? texture(layer3d, vec2(u3, 1.0 - v_uv.y)) : vec4(0.0);\n"
     "  vec3 c;\n"
     "  if (d3.a <= 0.0) c = dn.rgb;\n"
     "  else if (dn.a <= 0.0) c = d3.rgb;\n"
@@ -91,9 +94,20 @@ static GLuint make_texture(void) {
     return t;
 }
 
-static void upload(GLuint tex, const uint32_t *pixels) {
+// Uploads a 192-line picture `width` wide (widescreen 2D), reallocating the texture when the width changes.
+static void upload(GLuint tex, const uint32_t *pixels, int width) {
+    static GLuint names[8];
+    static int widths[8];
+    int i = 0;
+    while (i < 7 && names[i] && names[i] != tex) i++;
+    names[i] = tex;
     glBindTexture(GL_TEXTURE_2D, tex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 192, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    if (widths[i] != width) {
+        widths[i] = width;
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, 192, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, 192, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    }
 }
 
 static void draw_quad(int x, int y, int w, int h, int surface_w, int surface_h) {
@@ -112,7 +126,8 @@ static void draw_quad(int x, int y, int w, int h, int surface_w, int surface_h) 
 typedef struct Presented {
     bool software; // both screens complete in s_tex_plain[0..1]
     bool a_on_top;
-    bool race;       // a race frame: its 3D is projected at the wide aspect ratio
+    bool race;       // a race frame
+    int width_top, width_bottom; // of the 2D pictures of the top and bottom screens (top: widescreen)
     uint16_t bright; // engine A MASTER_BRIGHT
     float backdrop[3];
     int scale;
@@ -120,9 +135,9 @@ typedef struct Presented {
 } Presented;
 
 static GLuint s_prog_plain, s_prog_compose, s_tex_plain[2], s_tex_above, s_tex_below;
-static GLint s_u_bright_mode, s_u_bright, s_u_wide, s_u_backdrop;
-static Presented s_shown = {true, true, false, 0, {0, 0, 0}, 1, NULL};
-static float s_wide = 1.0f; // race aspect ratio / (4/3)
+static GLint s_u_bright_mode, s_u_bright, s_u_k2, s_u_k3, s_u_backdrop;
+static Presented s_shown = {true, true, false, 256, 256, 0, {0, 0, 0}, 1, NULL};
+static float s_wide = 1.0f; // the display's aspect ratio / (4/3)
 // The 3D lists of the last two frames (interpolation), only the used parts copied.
 static Gx3dFrame s_frames3d[2];
 static int s_cur3d;
@@ -148,7 +163,8 @@ void present_init(void) {
     glUniform1i(glGetUniformLocation(s_prog_compose, "layer3d"), 2);
     s_u_bright_mode = glGetUniformLocation(s_prog_compose, "bright_mode");
     s_u_bright = glGetUniformLocation(s_prog_compose, "bright");
-    s_u_wide = glGetUniformLocation(s_prog_compose, "wide");
+    s_u_k2 = glGetUniformLocation(s_prog_compose, "k2");
+    s_u_k3 = glGetUniformLocation(s_prog_compose, "k3");
     s_u_backdrop = glGetUniformLocation(s_prog_compose, "backdrop");
     s_tex_plain[0] = make_texture();
     s_tex_plain[1] = make_texture();
@@ -158,8 +174,17 @@ void present_init(void) {
 }
 
 void present_update(const FrameSnapshot *f, int scale) {
-    static uint32_t buf_a[256 * 192], buf_b[256 * 192], buf_below[256 * 192], layer3d[256 * 192];
+    static uint32_t buf_a[GPU2D_MAX_W * 192], buf_b[GPU2D_MAX_W * 192], buf_below[GPU2D_MAX_W * 192],
+        layer3d[256 * 192];
     s_shown.a_on_top = gpu2d_engine_a_on_top(f);
+    // Widescreen: the top screen's 2D is drawn as wide as the display (DS columns added on both sides).
+    int top_w = (int) (192 * 4.0f / 3.0f * s_wide + 0.5f) & ~1;
+    if (top_w < 256) top_w = 256;
+    if (top_w > GPU2D_MAX_W) top_w = GPU2D_MAX_W;
+    int margin = (top_w - 256) / 2;
+    s_shown.width_top = top_w;
+    s_shown.width_bottom = 256;
+    int width_a = s_shown.a_on_top ? top_w : 256, width_b = s_shown.a_on_top ? 256 : top_w;
     bool capture = f->io[0x67] & 0x80;
     uint32_t dispcnt_a = (uint32_t) f->io[0] | f->io[1] << 8 | f->io[2] << 16 | (uint32_t) f->io[3] << 24;
     bool has_3d = (dispcnt_a & 8) && ((dispcnt_a >> 16) & 3) == 1;
@@ -167,19 +192,19 @@ void present_update(const FrameSnapshot *f, int scale) {
         // The capture writes the frame into VRAM for later frames (the game shows it again, blends with it): it is
         // made in software at the DS resolution. With 3D, what is displayed still comes from the GPU path below.
         soft3d_render(&f->frame3d, f, layer3d);
-        gpu2d_render(f, layer3d, buf_a, buf_b);
+        gpu2d_render(f, layer3d, buf_a, buf_b, margin);
     }
     if (!has_3d) {
         s_shown.software = true;
-        if (!capture) gpu2d_render(f, NULL, buf_a, buf_b);
-        upload(s_tex_plain[0], buf_a);
-        upload(s_tex_plain[1], buf_b);
+        if (!capture) gpu2d_render(f, NULL, buf_a, buf_b, margin); // buf_a: top screen, buf_b: bottom
+        upload(s_tex_plain[0], buf_a, top_w);
+        upload(s_tex_plain[1], buf_b, 256);
     } else {
         s_shown.software = false;
-        gpu2d_render_split(f, buf_a, buf_below, buf_b);
-        upload(s_tex_above, buf_a);
-        upload(s_tex_below, buf_below);
-        upload(s_tex_plain[1], buf_b); // engine B
+        gpu2d_render_split(f, buf_a, buf_below, buf_b, s_shown.a_on_top ? margin : 0, s_shown.a_on_top ? 0 : margin);
+        upload(s_tex_above, buf_a, width_a);
+        upload(s_tex_below, buf_below, width_a);
+        upload(s_tex_plain[1], buf_b, width_b); // engine B
         s_shown.bright = (uint16_t) (f->io[0x6c] | f->io[0x6d] << 8);
         uint16_t bd = (uint16_t) (f->palette[0] | f->palette[1] << 8);
         s_shown.backdrop[0] = (bd & 31) / 31.0f;
@@ -210,7 +235,11 @@ bool present_engine_a_on_top(void) { return s_shown.a_on_top; }
 
 void present_draw(const int layout[8], int w, int h, float t) {
     GLuint tex3d = 0;
-    float wide = s_shown.race ? s_wide : 1.0f;
+    // The 3D is as wide as the game projected it (wider than 4:3 for the widescreen cameras).
+    const Gx3dFrame *cur = &s_frames3d[s_cur3d];
+    float wide = cur->proj_aspect > 0 ? cur->proj_aspect / (4096.0f * 4.0f / 3.0f) : 1.0f;
+    if (wide < 1.05f) wide = 1.0f;
+    if (wide > s_wide) wide = s_wide;
     if (!s_shown.software && s_shown.snap) {
         tex3d = gl3d_render(&s_frames3d[s_cur3d], s_have_prev ? &s_frames3d[s_cur3d ^ 1] : NULL, t, s_shown.snap,
                             s_shown.scale, wide);
@@ -223,7 +252,9 @@ void present_draw(const int layout[8], int w, int h, float t) {
         bool engine_a = (screen == 0) == s_shown.a_on_top;
         int r[4];
         if (layout[screen * 4 + 2] <= 0 || layout[screen * 4 + 3] <= 0) continue; // hidden
-        fit(&layout[screen * 4], engine_a && !s_shown.software ? 4.0f / 3.0f * wide : 4.0f / 3.0f, r);
+        float w2 = (float) (screen == 0 ? s_shown.width_top : s_shown.width_bottom), w3 = 256.0f * wide;
+        float wq = engine_a && !s_shown.software && w3 > w2 ? w3 : w2; // the screen's width in DS pixels
+        fit(&layout[screen * 4], wq / 192.0f, r);
         if (s_shown.software) {
             glUseProgram(s_prog_plain);
             glActiveTexture(GL_TEXTURE0);
@@ -240,7 +271,8 @@ void present_draw(const int layout[8], int w, int h, float t) {
             glBindTexture(GL_TEXTURE_2D, s_tex_below);
             glActiveTexture(GL_TEXTURE2);
             glBindTexture(GL_TEXTURE_2D, tex3d);
-            glUniform1f(s_u_wide, wide);
+            glUniform1f(s_u_k2, wq / w2);
+            glUniform1f(s_u_k3, wq / w3);
             glUniform3fv(s_u_backdrop, 1, s_shown.backdrop);
             uint32_t mode = s_shown.bright >> 14, factor = s_shown.bright & 31;
             if (factor > 16) factor = 16;

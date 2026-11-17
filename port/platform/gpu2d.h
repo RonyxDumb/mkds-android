@@ -31,15 +31,20 @@ void vram_map_build(VramMap *map, const uint8_t vramcnt[10]);
 // Pointer to `offset` in region, or NULL. Offsets within a page are contiguous only up to the page end (16 KiB).
 const uint8_t *vram_ptr(const VramMap *map, const uint8_t *vram, int region, uint32_t offset);
 
-// Renders both screens (256x192 RGBA, 0xAABBGGRR). layer3d: the 3D layer of engine A (alpha in 0..31 << 24, colour
-// in RGB888), NULL for none. The output order is top screen, bottom screen (POWCNT1 bit 15 chooses which engine).
-void gpu2d_render(const FrameSnapshot *f, const uint32_t *layer3d, uint32_t *top, uint32_t *bottom);
+// Widest line: 256 DS columns plus up to 128 more on each side (widescreen).
+#define GPU2D_MAX_W 512
+
+// Renders both screens (RGBA, 0xAABBGGRR, 192 lines). layer3d: the 3D layer of engine A (256x192, alpha in 0..31 <<
+// 24, colour in RGB888), NULL for none. The output order is top screen, bottom screen (POWCNT1 bit 15 chooses which
+// engine). Widescreen: the top screen is 256 + 2 * top_margin wide (the bottom background layer and the backdrop
+// continue to the sides), the bottom one 256.
+void gpu2d_render(const FrameSnapshot *f, const uint32_t *layer3d, uint32_t *top, uint32_t *bottom, int top_margin);
 
 // For a 3D layer rendered on the GPU: engine A's output split into what lies above the 3D layer and below it (see
 // render_engine_line), engine B's output complete. Master brightness is not applied to engine A in split mode.
 #define GPU2D_SPLIT ((const uint32_t *) (uintptr_t) 1)
 void gpu2d_render_split(const FrameSnapshot *f, uint32_t *engine_a_above, uint32_t *engine_a_below,
-                        uint32_t *engine_b);
+                        uint32_t *engine_b, int margin_a, int margin_b);
 bool gpu2d_engine_a_on_top(const FrameSnapshot *f);
 
 // Software 3D rasteriser at the DS resolution (host tests and fallback).

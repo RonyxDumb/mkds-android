@@ -60,8 +60,18 @@ static void wav_header(FILE *f, uint32_t frames) {
 static bool s_bglog;
 static int32_t s_wide_fx;
 static bool on_frame(const FrameSnapshot *f, uint64_t n) {
+    if (s_bglog && getenv("MKDS_OAM") && n == (uint64_t) atoi(getenv("MKDS_OAM"))) {
+        const uint16_t *oam = (const uint16_t *) f->oam;
+        for (int i = 0; i < 128; i++) {
+            uint16_t a0 = oam[i * 4], a1 = oam[i * 4 + 1];
+            if (!(a0 & 0x100) && (a0 & 0x200)) continue;
+            port_log("oam %d y %d x %d shape %d size %d affine %d dbl %d mode %d", i, a0 & 0xff, a1 & 0x1ff, a0 >> 14,
+                     a1 >> 14, (a0 >> 8) & 1, (a0 >> 9) & 1, (a0 >> 10) & 3);
+        }
+    }
     if (s_bglog) {
         const uint16_t *io = (const uint16_t *) f->io;
+        port_log("win %04x %04x %04x %04x in %04x out %04x", io[0x20], io[0x21], io[0x22], io[0x23], io[0x24], io[0x25]);
         port_log("bg %llu cnt %04x %04x %04x %04x ofs %d %d %d %d %d %d %d %d", (unsigned long long) n, io[4], io[5], io[6],
                  io[7], io[8], io[9], io[10], io[11], io[12], io[13], io[14], io[15]);
     }

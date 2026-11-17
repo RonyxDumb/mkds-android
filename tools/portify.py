@@ -35,8 +35,12 @@ FIXUPS = [
     ("src/Main/System/main.c", r"^void main\(void\) \{", "void GameMain(void) {", 1),
     # VIEWPORT geometry command written by address.
     ("src/Main/Kart/kart_model_menu.c", r"\*\(u32 \*\) 0x4000580 = 0xbfff0000;", "PORT_IO_WRITE(reg_G3_VIEWPORT, 0xbfff0000);", 1),
-    # Widescreen: the race cameras take the aspect ratio set by the platform (4:3 by default).
+    # Widescreen: the cameras (race, kart menus, award ceremony) take the aspect ratio set by the platform (4:3 by
+    # default); the renderer draws a list as wide as its projection (GxFrame.proj_aspect).
     ("src/Main/Kart/kart_model_menu.c", r"camera->mAspectRatio = FIXED12_RATIO\(4, 3\);", "camera->mAspectRatio = g_port_aspect;", 1),
+    ("src/Main/Kart/karts.c", r"left = MUL_FIXED12_NO_ROUND\(bottom, 0x1555\);", "left = MUL_FIXED12_NO_ROUND(bottom, g_port_aspect);", 1),
+    ("src/Main/MapObjects/trophy.c", r"frustumRight = MUL_FIXED12_NO_ROUND\(-frustumTop, 0x1555\);",
+     "frustumRight = MUL_FIXED12_NO_ROUND(-frustumTop, g_port_aspect);", 1),
     ("libs/NitroSystem/g2d/src/font_glyph_layout.c", r"asm \{ clz leadingZeros, value \}", "leadingZeros = __builtin_clz(value);", 1),
 ]
 

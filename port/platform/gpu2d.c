@@ -5,6 +5,7 @@
 #include "gpu2d.h"
 
 #include <string.h>
+#include <stdlib.h>
 
 static void capture_done_in_process(void) {
     *(volatile uint8_t *) (uintptr_t) 0x04000067 &= 0x7f; // DISPCAPCNT: capture finished
@@ -125,7 +126,23 @@ typedef struct Engine {
     bool is_a;
     int bg_region, obj_region, bgext_region, objext_region;
     uint32_t dispcnt;
+    // Widescreen: DS columns drawn beyond each side (the line is 256 + 2 * margin wide, DS x = index - margin).
+    // Only the bottom background layer and the backdrop continue there; sprites near the side edges move out with
+    // the screen edges in races (hud_shift).
+    int margin;
+    bool hud_shift;
+    int ext_bg; // the layer drawn across the whole width, -1 none
+    // A still picture as the extended layer: beyond the DS screen it shows its edge colours, blurred vertically
+    // (per line, BGR555 | 0x8000 when opaque), fading a little towards the outside, instead of repeating.
+    const uint16_t *side[2];
 } Engine;
+
+static inline uint16_t fade555(uint16_t c, int d, int margin) {
+    if (!(c & 0x8000)) return 0;
+    int f = 256 - d * 96 / margin; // down to 62% at the outer edge
+    int r = (c & 31) * f >> 8, g = ((c >> 5) & 31) * f >> 8, b = ((c >> 10) & 31) * f >> 8;
+    return (uint16_t) (0x8000 | r | g << 5 | b << 10);
+}
 
 static inline uint16_t io16(const Engine *e, uint32_t off) { return (uint16_t) (e->io[off] | e->io[off + 1] << 8); }
 static inline uint32_t io32(const Engine *e, uint32_t off) { return io16(e, off) | (uint32_t) io16(e, off + 2) << 16; }
@@ -133,13 +150,20 @@ static inline uint32_t io32(const Engine *e, uint32_t off) { return io16(e, off)
 #define LAYER_OBJ 4
 #define LAYER_BD 5
 
-typedef struct Line {
-    uint16_t bg[4][256];   // bit 15 = opaque
-    uint16_t obj[256];
-    uint8_t obj_prio[256]; // 4 = none
-    uint8_t obj_alpha[256]; // 0xff normal, 0xfe semi-transparent, 0..15 bitmap alpha
-    uint8_t obj_window[256];
+typedef struct Line { // indexed by DS x + margin
+    uint16_t bg[4][GPU2D_MAX_W];   // bit 15 = opaque
+    uint16_t obj[GPU2D_MAX_W];
+    uint8_t obj_prio[GPU2D_MAX_W]; // 4 = none
+    uint8_t obj_alpha[GPU2D_MAX_W]; // 0xff normal, 0xfe semi-transparent, 0..15 bitmap alpha
+    uint8_t obj_window[GPU2D_MAX_W];
 } Line;
+
+// Columns a background layer covers: the whole width for the extended layer, the DS screen otherwise.
+static inline void bg_span(const Engine *e, int bg, int *x0, int *x1) {
+    bool ext = bg == e->ext_bg;
+    *x0 = ext ? -e->margin : 0;
+    *x1 = ext ? 256 + e->margin : 256;
+}
 
 static uint16_t ext_palette_color(const Engine *e, int region, uint32_t slot_offset, uint32_t index) {
     return rd16(e->map, e->f->vram, region, slot_offset + index * 2) & 0x7fff;
@@ -163,8 +187,15 @@ static void draw_text_bg(const Engine *e, int bg, int y, uint16_t *out) {
         ext_slot += 2;
     }
     uint32_t sy = (y + vofs) & (h - 1);
-    for (int x = 0; x < 256; x++) {
-        uint32_t sx = (x + hofs) & (w - 1);
+    int x0, x1;
+    bg_span(e, bg, &x0, &x1);
+    out += e->margin;
+    for (int x = x0; x < x1; x++) {
+        if ((x < 0 || x > 255) && e->side[0]) {
+            out[x] = fade555(e->side[x > 255][y], x < 0 ? -x : x - 255, e->margin);
+            continue;
+        }
+        uint32_t sx = ((uint32_t) x + hofs) & (w - 1);
         uint32_t block = (sx >= 256 ? 1 : 0) + (sy >= 256 ? (w == 512 ? 2 : 1) : 0);
         uint32_t map_addr = screen_base + block * 0x800 + ((sy & 255) / 8) * 64 + ((sx & 255) / 8) * 2;
         uint16_t entry = rd16(e->map, e->f->vram, e->bg_region, map_addr);
@@ -215,8 +246,15 @@ static void draw_affine_bg(const Engine *e, int bg, int y, uint16_t *out, int ki
     }
     uint32_t bitmap_base = ((cnt >> 8) & 31) * 0x4000;
     bool ext = e->dispcnt & 0x40000000;
-    for (int x = 0; x < 256; x++, rx += pa, ry += pc) {
-        int32_t sx = rx >> 8, sy = ry >> 8;
+    int x0, x1;
+    bg_span(e, bg, &x0, &x1);
+    out += e->margin;
+    for (int x = x0; x < x1; x++) {
+        if ((x < 0 || x > 255) && e->side[0]) {
+            out[x] = fade555(e->side[x > 255][y], x < 0 ? -x : x - 255, e->margin);
+            continue;
+        }
+        int32_t sx = (rx + pa * x) >> 8, sy = (ry + pc * x) >> 8;
         if (wrap) {
             sx &= (int32_t) w - 1;
             sy &= (int32_t) h - 1;
@@ -250,6 +288,20 @@ static void draw_affine_bg(const Engine *e, int bg, int y, uint16_t *out, int ki
     }
 }
 
+// One line of a background layer, as the BG mode makes it.
+static void draw_bg_line(const Engine *e, int bg, int y, uint16_t *out) {
+    uint32_t mode = e->dispcnt & 7;
+    if (bg < 2 || (bg == 2 && (mode == 0 || mode == 1 || mode == 3)) || (bg == 3 && mode == 0)) {
+        draw_text_bg(e, bg, y, out);
+    } else if ((bg == 2 && (mode == 2 || mode == 1)) || (bg == 3 && (mode == 1 || mode == 2))) {
+        draw_affine_bg(e, bg, y, out, 0);
+    } else {
+        uint16_t cnt = io16(e, 0x08 + bg * 2);
+        int kind = !(cnt & 0x80) ? 1 : (cnt & 4) ? 3 : 2;
+        draw_affine_bg(e, bg, y, out, kind);
+    }
+}
+
 // Sprites of one line.
 static const uint8_t s_obj_w[3][4] = {{8, 16, 32, 64}, {16, 32, 32, 64}, {8, 8, 16, 32}};
 static const uint8_t s_obj_h[3][4] = {{8, 16, 32, 64}, {8, 8, 16, 32}, {16, 32, 32, 64}};
@@ -277,6 +329,12 @@ static void draw_objs(const Engine *e, int y, Line *line) {
         if (dy >= bh) continue;
         int ox = a1 & 0x1ff;
         if (ox >= 256) ox -= 512;
+        if (e->hud_shift && bw <= 64) {
+            // Race HUD near a side of the DS screen: to the same side of the wide screen.
+            int cx = ox + bw / 2;
+            if (cx < 72 && cx >= 0) ox -= e->margin;
+            else if (cx > 184 && cx < 256) ox += e->margin;
+        }
         uint32_t mode = (a0 >> 10) & 3;
         uint32_t prio = (a2 >> 10) & 3;
         uint32_t tile = a2 & 0x3ff;
@@ -291,7 +349,8 @@ static void draw_objs(const Engine *e, int y, Line *line) {
         }
         for (int bx = 0; bx < bw; bx++) {
             int x = ox + bx;
-            if (x < 0 || x >= 256) continue;
+            if (x < -e->margin || x >= 256 + e->margin) continue;
+            int lx = x + e->margin;
             int tx, ty;
             if (affine) {
                 int cx = bx - bw / 2, cy = dy - bh / 2;
@@ -337,13 +396,13 @@ static void draw_objs(const Engine *e, int y, Line *line) {
                 }
             }
             if (mode == 2) {
-                line->obj_window[x] = 1;
+                line->obj_window[lx] = 1;
                 continue;
             }
-            if (prio <= line->obj_prio[x]) {
-                line->obj[x] = (color & 0x7fff) | 0x8000;
-                line->obj_prio[x] = (uint8_t) prio;
-                line->obj_alpha[x] = alpha;
+            if (prio <= line->obj_prio[lx]) {
+                line->obj[lx] = (color & 0x7fff) | 0x8000;
+                line->obj_prio[lx] = (uint8_t) prio;
+                line->obj_alpha[lx] = alpha;
             }
         }
     }
@@ -388,17 +447,18 @@ static uint32_t darken(uint32_t c, uint32_t ey) {
 // Window mask of each pixel: bits 0..5 = layers and effects enabled there.
 static void windows(const Engine *e, int y, const Line *line, uint8_t *mask) {
     uint32_t wins = (e->dispcnt >> 13) & 7;
+    int width = 256 + 2 * e->margin;
     if (!wins) {
-        memset(mask, 0x3f, 256);
+        memset(mask, 0x3f, (size_t) width);
         return;
     }
     uint16_t winin = io16(e, 0x48), winout = io16(e, 0x4a);
-    for (int x = 0; x < 256; x++) {
-        mask[x] = winout & 0x3f;
+    for (int i = 0; i < width; i++) {
+        mask[i] = winout & 0x3f;
     }
     if (wins & 4) {
-        for (int x = 0; x < 256; x++) {
-            if (line->obj_window[x]) mask[x] = (winout >> 8) & 0x3f;
+        for (int i = 0; i < width; i++) {
+            if (line->obj_window[i]) mask[i] = (winout >> 8) & 0x3f;
         }
     }
     for (int w = 1; w >= 0; w--) {
@@ -407,9 +467,12 @@ static void windows(const Engine *e, int y, const Line *line, uint8_t *mask) {
         int x1 = hreg >> 8, x2 = hreg & 0xff, y1 = vreg >> 8, y2 = vreg & 0xff;
         bool in_y = y1 <= y2 ? (y >= y1 && y < y2) : (y >= y1 || y < y2);
         if (!in_y) continue;
-        for (int x = 0; x < 256; x++) {
+        for (int i = 0; i < width; i++) {
+            // Beyond the DS screen: as its edge columns (254 on the right: a window ending at 255 covers it).
+            int x = i - e->margin;
+            x = x < 0 ? 0 : x > 254 ? 254 : x;
             bool in_x = x1 <= x2 ? (x >= x1 && x < x2) : (x >= x1 || x < x2);
-            if (in_x) mask[x] = (winin >> (w * 8)) & 0x3f;
+            if (in_x) mask[i] = (winin >> (w * 8)) & 0x3f;
         }
     }
 }
@@ -429,21 +492,15 @@ static void render_engine_line(const Engine *e, int y, const uint32_t *layer3d, 
     for (int bg = 0; bg < 4; bg++) {
         if (!(e->dispcnt & (0x100u << bg))) continue;
         if (bg == 0 && bg0_3d) continue;
-        if (bg < 2 || (bg == 2 && (mode == 0 || mode == 1 || mode == 3)) || (bg == 3 && mode == 0)) {
-            draw_text_bg(e, bg, y, line.bg[bg]);
-        } else if ((bg == 2 && (mode == 2 || mode == 1)) || (bg == 3 && (mode == 1 || mode == 2))) {
-            draw_affine_bg(e, bg, y, line.bg[bg], 0);
-        } else {
-            uint16_t cnt = io16(e, 0x08 + bg * 2);
-            int kind = !(cnt & 0x80) ? 1 : (cnt & 4) ? 3 : 2;
-            draw_affine_bg(e, bg, y, line.bg[bg], kind);
-        }
+        draw_bg_line(e, bg, y, line.bg[bg]);
     }
+    (void) mode;
     if (e->dispcnt & 0x1000) {
         draw_objs(e, y, &line);
     }
-    uint8_t mask[256];
+    uint8_t mask[GPU2D_MAX_W];
     windows(e, y, &line, mask);
+    int width = 256 + 2 * e->margin;
 
     uint16_t bldcnt = io16(e, 0x50), bldalpha = io16(e, 0x52);
     uint32_t effect = (bldcnt >> 6) & 3;
@@ -461,7 +518,7 @@ static void render_engine_line(const Engine *e, int y, const uint32_t *layer3d, 
     }
 
     if (layer3d == GPU2D_SPLIT && bg0_3d) {
-        for (int x = 0; x < 256; x++) {
+        for (int x = 0; x < width; x++) {
             // The three topmost layers, with the 3D layer always present.
             int top[3] = {LAYER_BD, LAYER_BD, LAYER_BD};
             uint32_t color[3] = {backdrop, backdrop, backdrop};
@@ -527,7 +584,7 @@ static void render_engine_line(const Engine *e, int y, const uint32_t *layer3d, 
         return;
     }
 
-    for (int x = 0; x < 256; x++) {
+    for (int x = 0; x < width; x++) {
         // Find the two topmost layers.
         int top[2] = {LAYER_BD, LAYER_BD};
         uint32_t color[2] = {backdrop, backdrop};
@@ -543,8 +600,9 @@ static void render_engine_line(const Engine *e, int y, const uint32_t *layer3d, 
             for (int bg = 0; bg < 4 && found < 2; bg++) {
                 if (prio[bg] != p || !(mask[x] & (1u << bg)) || !(e->dispcnt & (0x100u << bg))) continue;
                 if (bg == 0 && bg0_3d) {
-                    if (!layer3d) continue;
-                    uint32_t c = layer3d[y * 256 + x];
+                    int dx = x - e->margin;
+                    if (!layer3d || dx < 0 || dx > 255) continue;
+                    uint32_t c = layer3d[y * 256 + dx];
                     uint32_t a = c >> 24;
                     if (a == 0) continue;
                     if (found == 0) alpha3d = a;
@@ -583,17 +641,32 @@ static void render_engine_line(const Engine *e, int y, const uint32_t *layer3d, 
     }
 }
 
-static void master_brightness(uint16_t reg, uint32_t *line) {
+static void master_brightness(uint16_t reg, uint32_t *line, int width) {
     uint32_t mode = reg >> 14, factor = reg & 31;
     if (factor > 16) factor = 16;
     if (!factor || mode == 0 || mode == 3) return;
-    for (int x = 0; x < 256; x++) {
+    for (int x = 0; x < width; x++) {
         line[x] = mode == 1 ? brighten(line[x], factor) : darken(line[x], factor);
     }
 }
 
+// The layer seen behind all others (the one to continue beyond the DS screen): 2D BG number, 4 when it is the 3D
+// layer, -1 when none.
+static int bottom_layer(const Engine *e) {
+    int best = -1, best_prio = -1;
+    for (int bg = 0; bg < 4; bg++) {
+        if (!(e->dispcnt & (0x100u << bg))) continue;
+        int prio = io16(e, 0x08 + bg * 2) & 3;
+        if (prio >= best_prio) { // the higher number is behind at equal priority
+            best_prio = prio;
+            best = bg == 0 && e->is_a && (e->dispcnt & 8) ? 4 : bg;
+        }
+    }
+    return best;
+}
+
 static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a, const uint32_t *layer3d,
-                          uint32_t *out, uint32_t *below) {
+                          uint32_t *out, uint32_t *below, int margin) {
     Engine e;
     e.f = f;
     e.map = map;
@@ -605,38 +678,94 @@ static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a,
     e.bgext_region = is_a ? VR_BGEXT_A : VR_BGEXT_B;
     e.objext_region = is_a ? VR_OBJEXT_A : VR_OBJEXT_B;
     e.dispcnt = io32(&e, 0);
+    e.margin = margin;
+    e.hud_shift = margin > 0 && is_a && f->scene == 2 && (e.dispcnt & 8);
+    e.ext_bg = margin > 0 ? bottom_layer(&e) : -1;
+    if (e.ext_bg == 4) e.ext_bg = -1;
+    e.side[0] = e.side[1] = NULL;
+    if (e.ext_bg >= 0) {
+        // A scrolling layer or one with more map beyond the screen goes on as its map does (patterns, skies); a
+        // still picture made for the screen (logos, title, menu backgrounds) is mirrored at its edges instead of
+        // repeating.
+        static uint16_t last_hofs[2][4];
+        uint16_t cnt = io16(&e, 0x08 + e.ext_bg * 2), hofs = io16(&e, 0x10 + e.ext_bg * 4);
+        bool text = e.ext_bg < 2 || (e.dispcnt & 7) == 0 || ((e.dispcnt & 7) == 1 && e.ext_bg == 2) ||
+                    ((e.dispcnt & 7) == 3 && e.ext_bg == 2);
+        bool scrolling = hofs != last_hofs[is_a ? 0 : 1][e.ext_bg];
+        last_hofs[is_a ? 0 : 1][e.ext_bg] = hofs;
+        bool more_map = text ? (cnt & 0x4000) != 0 : (cnt & 0x2000) != 0; // 512 wide / affine wrap-around
+        if (!(scrolling || more_map)) {
+            // Its edge columns, blurred vertically.
+            static uint16_t edge[2][192], side[2][192];
+            static uint16_t row[GPU2D_MAX_W];
+            int bg = e.ext_bg;
+            e.ext_bg = -1; // the DS columns only
+            for (int y = 0; y < 192; y++) {
+                memset(row, 0, sizeof(row));
+                draw_bg_line(&e, bg, y, row);
+                edge[0][y] = row[margin];
+                edge[1][y] = row[margin + 255];
+            }
+            e.ext_bg = bg;
+            for (int k = 0; k < 2; k++) {
+                for (int y = 0; y < 192; y++) {
+                    int sum[3] = {0, 0, 0}, n = 0, opaque = 0;
+                    for (int j = y - 10; j <= y + 10; j++) {
+                        if (j < 0 || j > 191) continue;
+                        uint16_t c = edge[k][j];
+                        n++;
+                        if (!(c & 0x8000)) continue;
+                        opaque++;
+                        sum[0] += c & 31;
+                        sum[1] += (c >> 5) & 31;
+                        sum[2] += (c >> 10) & 31;
+                    }
+                    side[k][y] = opaque * 2 < n ? 0
+                                                : (uint16_t) (0x8000 | sum[0] / opaque | (sum[1] / opaque) << 5 |
+                                                              (sum[2] / opaque) << 10);
+                }
+            }
+            e.side[0] = side[0];
+            e.side[1] = side[1];
+        }
+    }
+    int width = 256 + 2 * margin;
     uint32_t display = (e.dispcnt >> 16) & 3;
     if (!is_a && display > 1) display = 1;
     bool forced_blank = e.dispcnt & 0x80;
 
     static uint32_t engine_a_out[256 * 192];
     for (int y = 0; y < 192; y++) {
-        uint32_t *line = out + y * 256;
+        uint32_t *line = out + y * width;
         if (forced_blank || display == 0) {
-            for (int x = 0; x < 256; x++) line[x] = 0xffffffffu; // white
+            for (int x = 0; x < width; x++) line[x] = 0xffffffffu; // white
+            if (below) memset(below + y * width, 0, (size_t) width * 4);
             continue;
         }
         if (display == 2) { // VRAM display: an LCDC bank as a 256x192 direct-colour picture
             uint32_t bank = (e.dispcnt >> 18) & 3;
-            for (int x = 0; x < 256; x++) {
-                line[x] = rgb555_to_888(rd16(map, f->vram, VR_LCDC, bank * 0x20000 + (y * 256 + x) * 2));
+            for (int x = 0; x < width; x++) {
+                int dx = x - margin;
+                line[x] = dx < 0 || dx > 255 ? 0xff000000u
+                                             : rgb555_to_888(rd16(map, f->vram, VR_LCDC,
+                                                                  bank * 0x20000 + (y * 256 + dx) * 2));
             }
         } else if (display == 3) {
-            for (int x = 0; x < 256; x++) line[x] = 0xff000000u;
+            for (int x = 0; x < width; x++) line[x] = 0xff000000u;
         } else {
-            render_engine_line(&e, y, layer3d, line, below ? below + y * 256 : NULL);
+            render_engine_line(&e, y, layer3d, line, below ? below + y * width : NULL);
         }
         if (is_a) {
-            memcpy(engine_a_out + y * 256, line, 256 * 4);
+            memcpy(engine_a_out + y * 256, line + margin, 256 * 4);
         }
         if (layer3d == GPU2D_SPLIT && is_a) {
             // The compositing shader applies the master brightness to the whole screen.
             if (!(e.dispcnt & 8) || display != 1 || forced_blank) {
-                for (int x = 0; x < 256; x++) below[y * 256 + x] = 0; // no 3D on this line
-                for (int x = 0; x < 256; x++) line[x] |= 0xff000000u;
+                for (int x = 0; x < width; x++) below[y * width + x] = 0; // no 3D on this line
+                for (int x = 0; x < width; x++) line[x] |= 0xff000000u;
             }
         } else {
-            master_brightness(io16(&e, 0x6c), line);
+            master_brightness(io16(&e, 0x6c), line, width);
         }
     }
     if (is_a && (f->io[0x67] & 0x80) && layer3d != GPU2D_SPLIT) {
@@ -644,21 +773,21 @@ static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a,
     }
 }
 
-void gpu2d_render(const FrameSnapshot *f, const uint32_t *layer3d, uint32_t *top, uint32_t *bottom) {
+void gpu2d_render(const FrameSnapshot *f, const uint32_t *layer3d, uint32_t *top, uint32_t *bottom, int top_margin) {
     VramMap map;
     vram_map_build(&map, f->vramcnt);
     uint16_t powcnt = (uint16_t) (f->io[0x304] | f->io[0x305] << 8);
     bool a_on_top = powcnt & 0x8000;
-    render_engine(f, &map, true, layer3d, a_on_top ? top : bottom, NULL);
-    render_engine(f, &map, false, NULL, a_on_top ? bottom : top, NULL);
+    render_engine(f, &map, true, layer3d, a_on_top ? top : bottom, NULL, a_on_top ? top_margin : 0);
+    render_engine(f, &map, false, NULL, a_on_top ? bottom : top, NULL, a_on_top ? 0 : top_margin);
 }
 
 void gpu2d_render_split(const FrameSnapshot *f, uint32_t *engine_a_above, uint32_t *engine_a_below,
-                        uint32_t *engine_b) {
+                        uint32_t *engine_b, int margin_a, int margin_b) {
     VramMap map;
     vram_map_build(&map, f->vramcnt);
-    render_engine(f, &map, true, GPU2D_SPLIT, engine_a_above, engine_a_below);
-    render_engine(f, &map, false, NULL, engine_b, NULL);
+    render_engine(f, &map, true, GPU2D_SPLIT, engine_a_above, engine_a_below, margin_a);
+    render_engine(f, &map, false, NULL, engine_b, NULL, margin_b);
 }
 
 // ------------------------------------------------------------------------------------------------ capture

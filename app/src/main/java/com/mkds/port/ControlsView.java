@@ -12,11 +12,9 @@ import android.view.View;
 /**
  * Screen layout and touch controls for playing on a phone in landscape.
  *
- * Two layouts, chosen from what the game shows:
- *  - race: the top screen fills the display in widescreen (the game renders the wider view), the touch screen (map
- *    and ranking) is a small inset in the top right corner; the swap button hides or shows it;
- *  - menus: both screens side by side, as large as fits, the touch screen on the right for tapping; the swap button
- *    exchanges them.
+ * The top screen fills the display in widescreen (the game draws the wider view), the touch screen sits as an inset
+ * in the top right corner; the swap button exchanges them (the touch screen large and centred, for menus that are
+ * easier to tap).
  * Controls:
  *  - left half: a floating stick that appears where the thumb lands and stays with that finger (the D-pad);
  *  - right side: a big A with R right above it (one thumb between them holds both: accelerate and drift), B, L (item),
@@ -60,18 +58,7 @@ final class ControlsView extends View {
     private final SparseArray<Finger> mFingers = new SparseArray<>();
     private final RectF mTopRect = new RectF(), mBottomRect = new RectF();
     private RectF mTouchRect = mBottomRect;
-    private boolean mSwapped, mInsetHidden, mRace;
-    private final Runnable mPoll = new Runnable() {
-        @Override
-        public void run() {
-            boolean race = Native.isRace();
-            if (race != mRace) {
-                mRace = race;
-                applyScreens();
-            }
-            postDelayed(this, 150);
-        }
-    };
+    private boolean mSwapped;
     private int mWidth, mHeight;
     private float mUnit;
     private final Paint mFill = new Paint(Paint.ANTI_ALIAS_FLAG), mText = new Paint(Paint.ANTI_ALIAS_FLAG),
@@ -95,8 +82,6 @@ final class ControlsView extends View {
         float u = mUnit = Math.min(h / 8f, w / 15f);
         Native.setWideAspect((float) w / h);
         applyScreens();
-        removeCallbacks(mPoll);
-        post(mPoll);
 
         // Right hand: A big, R above it, close enough for one thumb to cover both; B to the left of A; L and X/Y above B.
         place(mA, w - u * 1.45f, h - u * 1.55f, u * 0.95f);
@@ -118,19 +103,13 @@ final class ControlsView extends View {
         int w = mWidth, h = mHeight;
         if (w == 0) return;
         RectF top = mTopRect, bottom = mBottomRect;
-        if (mRace) {
-            // The race fills the display; the map is a small inset (or hidden).
-            top.set(0, 0, w, h);
-            float ih = h * 0.34f, iw = ih * 4f / 3f;
-            if (mInsetHidden) bottom.set(w, 0, w, 0);
-            else bottom.set(w - iw, 0, w, ih);
-        } else {
-            // Menus: both screens side by side.
-            float sw = Math.min(w / 2f, h * 4f / 3f), sh = sw * 3f / 4f, y = (h - sh) / 2, x = (w - 2 * sw) / 2;
-            RectF left = mSwapped ? bottom : top, right = mSwapped ? top : bottom;
-            left.set(x, y, x + sw, y + sh);
-            right.set(x + sw, y, x + 2 * sw, y + sh);
-        }
+        // The main screen fills the display (the top one is widescreen; the touch screen keeps 4:3, centred); the
+        // other one is an inset in the top right corner, as wide as the side margin of a 4:3 picture or more.
+        float ih = Math.max(h * 0.32f, (w - h * 4f / 3f) / 2f * 3f / 4f), iw = ih * 4f / 3f;
+        RectF main = mSwapped ? bottom : top, inset = mSwapped ? top : bottom;
+        if (mSwapped) main.set((w - h * 4f / 3f) / 2f, 0, (w + h * 4f / 3f) / 2f, h);
+        else main.set(0, 0, w, h);
+        inset.set(w - iw, 0, w, ih);
         mTouchRect = bottom;
         Native.setLayout(Math.round(top.left), Math.round(top.top), Math.round(top.width()), Math.round(top.height()),
                 Math.round(bottom.left), Math.round(bottom.top), Math.round(bottom.width()), Math.round(bottom.height()));
@@ -187,8 +166,7 @@ final class ControlsView extends View {
             if (bits != 0) {
                 f.role = ROLE_BUTTONS;
                 if ((bits & SWAP) != 0) {
-                    if (mRace) mInsetHidden = !mInsetHidden;
-                    else mSwapped = !mSwapped;
+                    mSwapped = !mSwapped;
                     applyScreens();
                 }
             } else if (mTouchRect.width() > 0 && mTouchRect.contains(x, y)) {

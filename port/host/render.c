@@ -166,7 +166,7 @@ void host_write_frame(const FrameSnapshot *f, const char *path) {
     static uint32_t screens[2][256 * 192];
     static uint32_t layer3d[256 * 192];
     soft3d_render(&f->frame3d, f, layer3d);
-    gpu2d_render(f, layer3d, screens[0], screens[1]);
+    gpu2d_render(f, layer3d, screens[0], screens[1], 0);
     static uint32_t out[256 * 384];
     memcpy(out, screens[0], sizeof(screens[0]));
     memcpy(out + 256 * 192, screens[1], sizeof(screens[1]));
