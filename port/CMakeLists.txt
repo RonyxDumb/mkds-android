@@ -59,7 +59,7 @@ endforeach()
 # ------------------------------------------------------------------ platform layer
 file(GLOB PLATFORM_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/*.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/platform/*.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/platform/hostside/*.c)
 option(HOST_GL "Host test build: render with OpenGL ES (EGL, Mesa)" OFF)
 file(GLOB GL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/platform/gl/*.c)
 if (ANDROID)

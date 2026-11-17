@@ -5,7 +5,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+#include "hostapi.h"
 
 #include "types.h"
 #include "registers.h"
@@ -79,22 +79,20 @@ void port_tp_vblank(void) {
 // ------------------------------------------------------------------------------------------------ real-time clock
 void RTC_Init(void) {}
 RTCResult RTC_GetDate(RTCDate *date) {
-    time_t now = time(NULL);
-    struct tm tm;
-    localtime_r(&now, &tm);
-    date->mYear = (u32) (tm.tm_year % 100);
-    date->mMonth = (u32) tm.tm_mon + 1;
-    date->mDay = (u32) tm.tm_mday;
-    date->mWeek = (RTCWeek) tm.tm_wday;
+    HostTime tm;
+    hapi_local_time(&tm);
+    date->mYear = (u32) (tm.year % 100);
+    date->mMonth = (u32) tm.month;
+    date->mDay = (u32) tm.day;
+    date->mWeek = (RTCWeek) tm.weekday;
     return 0;
 }
 RTCResult RTC_GetTime(RTCTime *t) {
-    time_t now = time(NULL);
-    struct tm tm;
-    localtime_r(&now, &tm);
-    t->mHour = (u32) tm.tm_hour;
-    t->mMinute = (u32) tm.tm_min;
-    t->mSecond = (u32) tm.tm_sec;
+    HostTime tm;
+    hapi_local_time(&tm);
+    t->mHour = (u32) tm.hour;
+    t->mMinute = (u32) tm.minute;
+    t->mSecond = (u32) tm.second;
     return 0;
 }
 

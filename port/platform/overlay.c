@@ -5,8 +5,6 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <unistd.h>
 
 #include "types.h"
 #include "overlay_rom_loader.h"

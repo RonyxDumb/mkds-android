@@ -3,6 +3,7 @@
 #include "port.h"
 
 #include "types.h"
+#include "hostapi.h"
 
 void port_io_write(volatile void *reg, unsigned size, unsigned value) {
     uint32_t addr = (uint32_t) (uintptr_t) reg;
@@ -28,7 +29,7 @@ void port_io_write(volatile void *reg, unsigned size, unsigned value) {
         for (unsigned i = 0; i < size; i++) {
             uint32_t off = addr - 0x04000240 + i;
             if (off < 10 && bank_of[off] >= 0) {
-                port_vram_remap(bank_of[off]);
+                hapi_vram_remap(bank_of[off]);
             }
         }
     }

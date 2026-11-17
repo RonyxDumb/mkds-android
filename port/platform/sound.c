@@ -10,8 +10,9 @@
 #include "port.h"
 
 #include <math.h>
-#include <pthread.h>
 #include <stdlib.h>
+
+#include "hostapi.h"
 #include <string.h>
 
 #include "types.h"
@@ -27,7 +28,12 @@
 #define ENV_MIN (-92544) // envelope floor, 0.1 dB * 128
 #define FRAME_SECONDS (64.0 * 2728.0 / 33513982.0) // sound driver frame: 5.2 ms
 
-static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
+static void *s_lock;
+static const bool s_debug = false; // log notes and sequences
+static void snd_lock(void) {
+    if (!s_lock) s_lock = hapi_mutex_new();
+    hapi_mutex_lock(s_lock);
+}
 static SNDSharedWork *s_shared;
 static int s_output_rate = 48000;
 static double s_frame_accum;
@@ -440,7 +446,7 @@ static void note_on(Track *t, int key, int velocity, int length) {
         c->lfsr = 0x7fff;
         c->base_timer = (uint16_t) (16756991.0 / 261.63 / 8);
     }
-    if (getenv("MKDS_SND_DEBUG")) {
+    if (s_debug) {
         port_log("note p%d prog %d key %d vel %d len %d inst %d type %d fmt %d loop %d timer %04x ls %u ll %u swav %p",
                  t->player, t->program, key, velocity, length, inst.type, type, c->format, c->loop, c->base_timer,
                  c->loop_start, c->loop_len, (void *) c->data);
@@ -830,7 +836,7 @@ static void driver_frame(void) {
 
 // ------------------------------------------------------------------------------------------------ mixing
 void port_snd_render(int16_t *out, int frames, int rate) {
-    pthread_mutex_lock(&s_lock);
+    snd_lock();
     s_output_rate = rate;
     double frame_samples = FRAME_SECONDS * rate;
     for (int n = 0; n < frames; n++) {
@@ -865,7 +871,7 @@ void port_snd_render(int16_t *out, int frames, int rate) {
         out[n * 2] = (int16_t) (l > 32767 ? 32767 : l < -32768 ? -32768 : l);
         out[n * 2 + 1] = (int16_t) (r > 32767 ? 32767 : r < -32768 ? -32768 : r);
     }
-    pthread_mutex_unlock(&s_lock);
+    hapi_mutex_unlock(s_lock);
 }
 
 // ------------------------------------------------------------------------------------------------ alarms
@@ -942,7 +948,7 @@ static void run_command(const SNDCommand *cmd) {
     switch (cmd->mId) {
     case 0: // start sequence
     case 2: { // prepare: player, base, offset, bank
-        if (getenv("MKDS_SND_DEBUG")) port_log("seq cmd %u player %u base %08x off %x bank %08x", cmd->mId, a[0], a[1], a[2], a[3]);
+        if (s_debug) port_log("seq cmd %u player %u base %08x off %x bank %08x", cmd->mId, a[0], a[1], a[2], a[3]);
         int p = a[0] & 15;
         player_stop(p, true);
         Player *pl = &s_players[p];
@@ -1098,7 +1104,7 @@ void port_snd_pxi_word(u32 data) {
         return; // "process the commands now": they already are
     }
     static bool inited;
-    pthread_mutex_lock(&s_lock);
+    snd_lock();
     if (!inited) {
         inited = true;
         init_tables();
@@ -1117,5 +1123,5 @@ void port_snd_pxi_word(u32 data) {
         s_shared->mPlayerStatus = status;
         s_shared->mFinishCommandTag++;
     }
-    pthread_mutex_unlock(&s_lock);
+    hapi_mutex_unlock(s_lock);
 }

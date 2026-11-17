@@ -12,14 +12,12 @@
 // may wake threads, the switch happens when they return.
 #include "port.h"
 
-#include <pthread.h>
-#include <semaphore.h>
 #include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <math.h>
+
+#include "hostapi.h"
 
 #include "types.h"
 #include "registers.h"
@@ -39,29 +37,18 @@
 #include "card_rom_backup_access.h"
 #include "power_management_commands.h"
 
-#ifdef __ANDROID__
-#include <android/log.h>
-#endif
-
 volatile bool g_quit;
 volatile bool g_paused; // the app is in the background: the game stops at its next wait
 uint32_t g_vblank_rate_mhz = 59826;
 
 // ------------------------------------------------------------------------------------------------ logging
 void port_log(const char *fmt, ...) {
+    char line[512];
     va_list ap;
     va_start(ap, fmt);
-#ifdef __ANDROID__
-    char line[512];
     vsnprintf(line, sizeof(line), fmt, ap);
-    __android_log_write(ANDROID_LOG_INFO, "mkds", line);
-    extern void android_log_line(const char *line);
-    android_log_line(line);
-#else
-    vfprintf(stderr, fmt, ap);
-    fputc('\n', stderr);
-#endif
     va_end(ap);
+    hapi_log(line);
 }
 
 void port_fatal(const char *fmt, ...) {
@@ -71,15 +58,11 @@ void port_fatal(const char *fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     port_log("FATAL: %s", buf);
-    abort();
+    hapi_abort();
 }
 
 // ------------------------------------------------------------------------------------------------ time
-uint64_t port_now_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t) ts.tv_sec * 1000000000ull + (uint64_t) ts.tv_nsec;
-}
+uint64_t port_now_ns(void) { return hapi_now_ns(); }
 
 // OS ticks run at the bus clock / 64 (33.513982 MHz / 64).
 #define TICK_HZ 523655.96875
@@ -113,22 +96,22 @@ typedef struct HostThread {
     OSThread *thread;
     void (*func)(void *);
     void *arg;
-    sem_t run; // posted when the thread becomes the current one
-    pthread_t pthread;
+    void *run; // semaphore, posted when the thread becomes the current one
     bool started;
 } HostThread;
 
 #define MAX_THREADS 64
 static HostThread s_threads[MAX_THREADS];
-static pthread_mutex_t s_threads_lock = PTHREAD_MUTEX_INITIALIZER;
-static __thread HostThread *t_self;
+static void *s_threads_lock;
+#define t_self ((HostThread *) hapi_tls_get())
 
 static HostThread *host_of(OSThread *thread) {
-    pthread_mutex_lock(&s_threads_lock);
+    if (!s_threads_lock) s_threads_lock = hapi_mutex_new();
+    hapi_mutex_lock(s_threads_lock);
     HostThread *free_slot = NULL;
     for (int i = 0; i < MAX_THREADS; i++) {
         if (s_threads[i].thread == thread) {
-            pthread_mutex_unlock(&s_threads_lock);
+            hapi_mutex_unlock(s_threads_lock);
             return &s_threads[i];
         }
         if (!free_slot && s_threads[i].thread == NULL) {
@@ -138,22 +121,22 @@ static HostThread *host_of(OSThread *thread) {
     if (!free_slot) {
         port_fatal("os: more than %d threads", MAX_THREADS);
     }
+    void *sem = free_slot->run;
     memset(free_slot, 0, sizeof(*free_slot));
+    free_slot->run = sem; // semaphores are reused
     free_slot->thread = thread;
-    sem_init(&free_slot->run, 0, 0);
-    pthread_mutex_unlock(&s_threads_lock);
+    if (!free_slot->run) free_slot->run = hapi_sem_new();
+    hapi_mutex_unlock(s_threads_lock);
     return free_slot;
 }
 
-static void *host_thread_main(void *p) {
+static void host_thread_main(void *p) {
     HostThread *self = p;
-    t_self = self;
-    while (sem_wait(&self->run) != 0) {
-    }
+    hapi_tls_set(self);
+    hapi_sem_wait(self->run);
     s_irq_disabled = 0; // a new thread starts with interrupts enabled
     self->func(self->arg);
     OS_ExitThread();
-    return NULL;
 }
 
 // ------------------------------------------------------------------------------------------------ interrupts
@@ -415,8 +398,7 @@ static void wait_for_event(void) {
     }
     uint64_t now = os_time_ns();
     if (wake > now) {
-        struct timespec ts = {(time_t) ((wake - now) / 1000000000ull), (long) ((wake - now) % 1000000000ull)};
-        nanosleep(&ts, NULL);
+        hapi_sleep_ns(wake - now);
     }
 }
 
@@ -459,9 +441,8 @@ void OS_InitThread(void) {
     *(ThreadSystem **) HW_THREADINFO_MAIN = &OSi_ThreadInfo;
     OS_SetSwitchThreadCallback(NULL);
     // The launcher thread is the host thread that called port_os_run.
-    t_self = host_of(&OSi_LauncherThread);
+    hapi_tls_set(host_of(&OSi_LauncherThread));
     t_self->started = true;
-    t_self->pthread = pthread_self();
     // No idle thread: when nothing is runnable OSi_RescheduleThread waits for an interrupt itself.
     OSi_IdleThread.mPriority = THREAD_PRIORITY_IDLE;
     OSi_IdleThread.mState = THREAD_STATE_FINISHED;
@@ -495,15 +476,8 @@ void OS_CreateThread(OSThread *thread, void (*func)(void *), void *arg, u8 *stac
 }
 
 static void start_host(HostThread *host) {
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 8 * 1024 * 1024);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&host->pthread, &attr, host_thread_main, host) != 0) {
-        port_fatal("os: pthread_create failed");
-    }
-    pthread_attr_destroy(&attr);
     host->started = true;
+    hapi_thread_start(host_thread_main, host);
 }
 
 // Hands the CPU from the calling host thread to `next`. Returns when the calling thread is current again, unless it
@@ -522,18 +496,16 @@ static void switch_to(OSThread *current, OSThread *next) {
     if (!nh->started) {
         start_host(nh);
     }
-    sem_post(&nh->run);
+    hapi_sem_post(nh->run);
     if (current->mState == THREAD_STATE_FINISHED) {
-        pthread_mutex_lock(&s_threads_lock);
+        hapi_mutex_lock(s_threads_lock);
         if (self && self->thread == current) {
-            sem_destroy(&self->run);
-            self->thread = NULL;
+            self->thread = NULL; // the slot (and its semaphore) can be reused
         }
-        pthread_mutex_unlock(&s_threads_lock);
-        pthread_exit(NULL);
+        hapi_mutex_unlock(s_threads_lock);
+        hapi_thread_exit();
     }
-    while (sem_wait(&self->run) != 0) {
-    }
+    hapi_sem_wait(self->run);
     s_irq_disabled = saved_irq;
 }
 
@@ -550,11 +522,10 @@ void OSi_RescheduleThread(void) {
     // Nothing runnable: the DS idles until an interrupt wakes a thread. Deliver events until one does.
     while (next == NULL) {
         if (g_quit) {
-            pthread_exit(NULL);
+            hapi_thread_exit();
         }
         while (g_paused && !g_quit) {
-            struct timespec ts = {0, 20000000};
-            nanosleep(&ts, NULL);
+            hapi_sleep_ns(20000000);
         }
         OSIntrMode saved = s_irq_disabled;
         s_irq_disabled = 0; // the idle thread runs with interrupts enabled
@@ -672,7 +643,7 @@ void OS_Terminate(void) {
     port_log("OS_Terminate");
     g_quit = true;
     for (;;) {
-        pthread_exit(NULL);
+        hapi_thread_exit();
     }
 }
 

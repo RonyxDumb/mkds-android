@@ -3,7 +3,7 @@
 #include "port.h"
 #include "frame.h"
 
-#include <pthread.h>
+#include "hostapi.h"
 #include <stdatomic.h>
 #include <string.h>
 
@@ -25,7 +25,7 @@ static void capture(FrameSnapshot *f) {
     memcpy(f->io + 0x300, (const void *) (uintptr_t) (DS_IO_BASE + 0x300), 0x10); // POWCNT1
     memcpy(f->palette, (const void *) (uintptr_t) DS_PLTT_BASE, sizeof(f->palette));
     memcpy(f->oam, (const void *) (uintptr_t) DS_OAM_BASE, sizeof(f->oam));
-    memcpy(f->vram, g_vram_banks, sizeof(f->vram));
+    memcpy(f->vram, hapi_vram_banks(), sizeof(f->vram));
     memcpy(f->vramcnt, (const void *) (uintptr_t) (DS_IO_BASE + 0x240), sizeof(f->vramcnt));
     const Gx3dFrame *g = gx3d_displayed();
     Gx3dFrame *d = &f->frame3d;
@@ -45,18 +45,22 @@ const FrameSnapshot *port_frame_acquire(void) {
 }
 
 static PortInput s_input;
-static pthread_mutex_t s_input_lock = PTHREAD_MUTEX_INITIALIZER;
+static void *s_input_lock;
+static void input_lock(void) {
+    if (!s_input_lock) s_input_lock = hapi_mutex_new();
+    hapi_mutex_lock(s_input_lock);
+}
 
 void port_input_set(const PortInput *in) {
-    pthread_mutex_lock(&s_input_lock);
+    input_lock();
     s_input = *in;
-    pthread_mutex_unlock(&s_input_lock);
+    hapi_mutex_unlock(s_input_lock);
 }
 
 void port_input_get(PortInput *out) {
-    pthread_mutex_lock(&s_input_lock);
+    input_lock();
     *out = s_input;
-    pthread_mutex_unlock(&s_input_lock);
+    hapi_mutex_unlock(s_input_lock);
 }
 
 static void update_input_registers(void) {

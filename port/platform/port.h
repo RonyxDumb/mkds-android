@@ -49,8 +49,6 @@ extern const uint32_t g_vram_bank_size[VRAM_BANK_COUNT];
 void port_vram_remap(int bank);
 
 // ---------------------------------------------------------------- ROM (card.c)
-extern const uint8_t *g_rom;
-extern uint32_t g_rom_size;
 bool port_rom_open(const char *path);
 // Save data: loaded from / flushed to this file.
 void port_save_set_path(const char *path);
