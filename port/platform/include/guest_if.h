@@ -21,6 +21,7 @@ void guest_save_flush(void);
 void guest_set_paused(bool paused);
 void guest_set_vblank_rate(uint32_t mhz);
 void guest_set_aspect(int32_t fx12); // race camera aspect ratio (20.12), from the next race
+void guest_set_language(int language); // 1 English, 2 French, 3 German, 4 Italian, 5 Spanish; before the start
 uint64_t guest_frame_count(void);
 // Tests: the game stops after each frame until `done` is posted; `ready` is posted when a frame is captured.
 void guest_set_lockstep(void *ready, void *done);

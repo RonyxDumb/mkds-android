@@ -71,6 +71,8 @@ int main(int argc, char **argv) {
     uint32_t rate = atomic_load(&s->vblank_rate), paused = 0, input_seq = 0, flush = 0, captures = 0;
     int32_t aspect = 0;
     guest_set_vblank_rate(rate);
+    if (atomic_load(&s->language)) guest_set_language(atomic_load(&s->language));
+    if (atomic_load(&s->aspect)) guest_set_aspect(atomic_load(&s->aspect));
     PortInput *in = host_low_alloc(sizeof(*in));
     guest_start_game();
     atomic_store(&s->state, IPC_RUNNING);

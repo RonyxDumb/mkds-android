@@ -234,10 +234,75 @@ typedef struct Batch {
 static Batch *s_batches;
 static size_t s_batch_cap;
 
-// The same polygon in the previous list: same place in the list and same shape, texture and attributes.
-static bool same_polygon(const GxPolygon *a, const GxPolygon *b) {
-    return a->count == b->count && a->teximage == b->teximage && a->pltt == b->pltt &&
-           (a->attr & ~0x001f0000u) == (b->attr & ~0x001f0000u);
+// Frame interpolation: each polygon of the list is looked for in the previous list by a signature that stays the
+// same while a model moves (shape, texture, attributes and the texture coordinates of its vertices), the nearest one
+// to where the lists line up so far. Polygons not found, or found too far away (a cut), are drawn as they are.
+static uint32_t poly_signature(const Gx3dFrame *f, const GxPolygon *p) {
+    uint32_t h = p->count * 0x9e3779b1u ^ p->teximage * 0x85ebca77u ^ p->pltt * 0xc2b2ae3du ^
+                 (p->attr & ~0x001f0000u) * 0x27d4eb2fu;
+    for (int k = 0; k < p->count; k++) {
+        const GxVertex *v = &f->vertices[p->first + k];
+        h = (h ^ ((uint32_t) (uint16_t) v->s | (uint32_t) (uint16_t) v->t << 16)) * 0x01000193u;
+    }
+    return h ? h : 1;
+}
+
+#define MATCH_BITS 13
+static uint32_t s_match_key[1 << MATCH_BITS];
+static int32_t s_match_first[1 << MATCH_BITS];
+static int32_t *s_match_next;
+static uint32_t *s_prev_sig;
+static int32_t *s_match; // per polygon of the current list: index in the previous list, or -1
+static size_t s_match_cap;
+
+static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
+    size_t need = prev->polygon_count > f->polygon_count ? prev->polygon_count : f->polygon_count;
+    if (need + 1 > s_match_cap) {
+        s_match_cap = (need + 1) * 2;
+        s_match_next = realloc(s_match_next, s_match_cap * sizeof(*s_match_next));
+        s_prev_sig = realloc(s_prev_sig, s_match_cap * sizeof(*s_prev_sig));
+        s_match = realloc(s_match, s_match_cap * sizeof(*s_match));
+    }
+    memset(s_match_key, 0, sizeof(s_match_key));
+    // Hash chains, each in increasing list order.
+    for (int32_t j = (int32_t) prev->polygon_count - 1; j >= 0; j--) {
+        uint32_t sig = poly_signature(prev, &prev->polygons[j]);
+        s_prev_sig[j] = sig;
+        uint32_t slot = sig & ((1u << MATCH_BITS) - 1);
+        while (s_match_key[slot] && s_match_key[slot] != sig) slot = (slot + 1) & ((1u << MATCH_BITS) - 1);
+        s_match_next[j] = s_match_key[slot] ? s_match_first[slot] : -1;
+        s_match_key[slot] = sig;
+        s_match_first[slot] = j;
+    }
+    int32_t offset = 0;
+    for (uint32_t i = 0; i < f->polygon_count; i++) {
+        const GxPolygon *p = &f->polygons[i];
+        uint32_t sig = poly_signature(f, p);
+        int32_t want = (int32_t) i + offset, best = -1;
+        if (want >= 0 && want < (int32_t) prev->polygon_count && s_prev_sig[want] == sig) {
+            best = want;
+        } else {
+            uint32_t slot = sig & ((1u << MATCH_BITS) - 1);
+            while (s_match_key[slot] && s_match_key[slot] != sig) slot = (slot + 1) & ((1u << MATCH_BITS) - 1);
+            if (s_match_key[slot]) {
+                for (int32_t j = s_match_first[slot]; j >= 0; j = s_match_next[j]) {
+                    if (best < 0 || abs(j - want) < abs(best - want)) best = j;
+                }
+            }
+        }
+        if (best >= 0) {
+            // Too far from where it was (a camera cut, a teleport): not interpolated.
+            const GxVertex *a = &prev->vertices[prev->polygons[best].first], *b = &f->vertices[p->first];
+            float aw = a->w ? (float) a->w : 1.0f, bw = b->w ? (float) b->w : 1.0f;
+            float dx = a->x / aw - b->x / bw, dy = a->y / aw - b->y / bw;
+            if (dx * dx + dy * dy > 0.3f * 0.3f || (a->w > 0) != (b->w > 0)) {
+                s_match[i] = -1;
+                continue;
+            }
+            offset = best - (int32_t) i;
+        }
+        s_match[i] = best;
+    }
 }
 
 // `prev`/`pp`: the polygon in the previous list, to draw it at fraction `t` of the way from there (frame
@@ -276,6 +341,7 @@ uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const F
     int w = (int) (256 * scale * wide + 0.5f), h = 192 * scale;
     float sx = w / 256.0f; // horizontal pixels per DS pixel
     if (prev && (t >= 1.0f || prev->vertex_count == 0)) prev = NULL;
+    if (prev) match_lists(prev, f);
     ensure_target(w, h);
     VramMap map;
     vram_map_build(&map, snap->vramcnt);
@@ -326,9 +392,7 @@ uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const F
                 b->id = id;
             }
             Vertex *start = out;
-            const GxPolygon *pp = prev && i < prev->polygon_count && same_polygon(&prev->polygons[i], p)
-                                      ? &prev->polygons[i]
-                                      : NULL;
+            const GxPolygon *pp = prev && s_match[i] >= 0 ? &prev->polygons[s_match[i]] : NULL;
             push_polygon(f, p, &out, tex, prev, pp, t);
             b->count += (uint32_t) (out - start);
         }

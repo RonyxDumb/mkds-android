@@ -34,6 +34,7 @@ typedef struct IpcShared {
     _Atomic uint32_t audio_rate, audio_burst;
     _Atomic uint32_t captures; // display captures done by the renderer
     _Atomic int32_t aspect;    // race camera aspect ratio (20.12), 0 = unchanged
+    _Atomic int32_t language;  // console language, read at the start (0 = default)
 
     // game -> app
     _Atomic uint32_t frame_count;

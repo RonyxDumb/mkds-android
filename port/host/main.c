@@ -153,6 +153,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--press") && i + 1 < argc) parse_press(argv[++i]);
         else if (!strcmp(argv[i], "--realtime")) rate = 59826;
         else if (!strcmp(argv[i], "--bglog")) s_bglog = true;
+        else if (!strcmp(argv[i], "--lang") && i + 1 < argc) guest_set_language(atoi(argv[++i]));
         else if (!strcmp(argv[i], "--wide") && i + 1 < argc) {
             extern float g_host_aspect;
             g_host_aspect = (float) atof(argv[++i]);

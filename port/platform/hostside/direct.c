@@ -59,6 +59,8 @@ void guest_set_paused(bool paused) { g_paused = paused; }
 void guest_set_vblank_rate(uint32_t mhz) { g_vblank_rate_mhz = mhz; }
 extern int g_port_aspect;
 void guest_set_aspect(int32_t fx12) { g_port_aspect = fx12; }
+extern int g_port_language;
+void guest_set_language(int language) { g_port_language = language; }
 uint64_t guest_frame_count(void) { return g_frame_count; }
 void guest_set_lockstep(void *ready, void *done) {
     g_lockstep_ready = ready;

@@ -30,6 +30,9 @@ final class Native {
     /** Widescreen: the aspect ratio of the race view (the whole display). */
     static native void setWideAspect(float aspect);
 
+    /** The console language (before start): 1 English, 2 French, 3 German, 4 Italian, 5 Spanish. */
+    static native void setLanguage(int language);
+
     /** Whether the game is showing a race (the layout depends on it). */
     static native boolean isRace();
 

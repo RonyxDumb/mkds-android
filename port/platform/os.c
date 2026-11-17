@@ -607,11 +607,14 @@ void OS_SetArenaHi(OSArenaId id, void *hi) { SYSTEM_WORK->mArenaInfo.hi[id] = hi
 
 u32 OSi_Initialized;
 
+extern int g_port_language;
 void OS_Init(void) {
     if (OSi_Initialized) {
         return;
     }
     OSi_Initialized = 1;
+    // The user settings the firmware leaves at 0x027ffc80: the language in bits 0-2 of the halfword at +0x64.
+    *(volatile u16 *) (uintptr_t) 0x027ffce4 = (u16) ((*(volatile u16 *) (uintptr_t) 0x027ffce4 & ~7) | (g_port_language & 7));
     OS_InitArena();
     OS_InitLock();
     OS_InitIrqTable();
@@ -661,11 +664,15 @@ void WaitByLoop(s32 loopCount) {
 
 void VBlankIntrWait(void) { OS_WaitIrq(1, 1); }
 
-// The owner information the DS firmware keeps: what a fresh console reports.
+// The console's language (owner information): 1 English, 2 French, 3 German, 4 Italian, 5 Spanish. The host sets
+// it from the phone's language before the game starts.
+int g_port_language = 1;
+
+// The owner information the DS firmware keeps: a fresh console in the chosen language.
 void OS_GetOwnerInfo(OwnerInfo *info) {
     static const char name[] = "Player";
     memset(info, 0, sizeof(*info));
-    info->mLanguage = 1; // English
+    info->mLanguage = (u32) g_port_language;
     info->mFavoriteColor = 0;
     info->mBirthdayMonth = 1;
     info->mBirthdayDay = 1;

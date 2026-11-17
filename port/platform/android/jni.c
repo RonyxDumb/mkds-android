@@ -127,6 +127,12 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setWideAspect(JNIEnv *env, jcla
     guest_set_aspect((int32_t) (aspect * 4096.0f + 0.5f));
 }
 
+// The console language for the game (before start): 1 English, 2 French, 3 German, 4 Italian, 5 Spanish.
+JNIEXPORT void JNICALL Java_com_mkds_port_Native_setLanguage(JNIEnv *env, jclass cls, jint language) {
+    (void) env, (void) cls;
+    guest_set_language(language);
+}
+
 // Whether the game shows a race (the activity picks the screen layout from it).
 JNIEXPORT jboolean JNICALL Java_com_mkds_port_Native_isRace(JNIEnv *env, jclass cls) {
     (void) env, (void) cls;

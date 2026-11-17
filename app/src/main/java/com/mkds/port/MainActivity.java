@@ -149,6 +149,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
     private void startGame() {
         if (!sStarted) {
+            Native.setLanguage(gameLanguage());
             String err = Native.start(romFile().getAbsolutePath(), new File(getFilesDir(), "mkds.sav").getAbsolutePath());
             if (err != null) {
                 new AlertDialog.Builder(this).setTitle("Mario Kart DS").setMessage(err)
@@ -184,6 +185,17 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
         lp.preferredDisplayModeId = best.getModeId();
         getWindow().setAttributes(lp);
+    }
+
+    // The phone's language among the game's (English otherwise).
+    private static int gameLanguage() {
+        switch (java.util.Locale.getDefault().getLanguage()) {
+            case "fr": return 2;
+            case "de": return 3;
+            case "it": return 4;
+            case "es": return 5;
+            default: return 1;
+        }
     }
 
     private void hideSystemBars() {

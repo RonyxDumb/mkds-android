@@ -221,6 +221,7 @@ void guest_save_flush(void) { guest_call(s_header->save_flush, 0, 0, 0); }
 void guest_set_paused(bool paused) { *(volatile bool *) (uintptr_t) s_header->paused = paused; }
 void guest_set_vblank_rate(uint32_t mhz) { *(volatile uint32_t *) (uintptr_t) s_header->vblank_rate = mhz; }
 void guest_set_aspect(int32_t fx12) { *(volatile int32_t *) (uintptr_t) s_header->aspect = fx12; }
+void guest_set_language(int language) { *(volatile int32_t *) (uintptr_t) s_header->language = language; }
 
 uint64_t guest_frame_count(void) { return *(volatile uint64_t *) (uintptr_t) s_header->frame_count; }
 void guest_set_lockstep(void *ready, void *done) {
