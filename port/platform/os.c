@@ -44,6 +44,7 @@
 #endif
 
 volatile bool g_quit;
+volatile bool g_paused; // the app is in the background: the game stops at its next wait
 uint32_t g_vblank_rate_mhz = 59826;
 
 // ------------------------------------------------------------------------------------------------ logging
@@ -546,6 +547,10 @@ void OSi_RescheduleThread(void) {
     while (next == NULL) {
         if (g_quit) {
             pthread_exit(NULL);
+        }
+        while (g_paused && !g_quit) {
+            struct timespec ts = {0, 20000000};
+            nanosleep(&ts, NULL);
         }
         OSIntrMode saved = s_irq_disabled;
         s_irq_disabled = 0; // the idle thread runs with interrupts enabled
