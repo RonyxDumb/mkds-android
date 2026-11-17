@@ -238,8 +238,8 @@ static size_t s_batch_cap;
 
 // Frame interpolation pairs the models of two lists. A model piece is a vertex block (BEGIN_VTXS): its polygons,
 // culled ones included (GxPolygon.hidden), are the same every frame, so a block is found in the previous list by a
-// signature of all its polygons (shapes, textures, attributes, texture coordinates); among identical blocks (wheels,
-// item boxes, trees) the one nearest to where this one is now, each used once. A block not found, or found too far
+// signature of its structure (polygon shapes, texture formats and sizes, attributes); among blocks with the same
+// structure (wheels, item boxes, trees) the one nearest to where this one is now, each used once. A block not found, or found too far
 // away (a cut), is drawn as it is, whole: the parts of a model never separate.
 typedef struct Block {
     uint32_t first, count, sig;
@@ -270,13 +270,13 @@ static size_t find_blocks(const Gx3dFrame *f, int which) {
         int nv = 0;
         for (uint32_t k = i; k < j; k++) {
             const GxPolygon *p = &f->polygons[k];
+            // The structure only: animated textures (texture coordinates scrolling, frames of a texture animation,
+            // palette changes) must not make a piece unrecognisable from one frame to the next.
             h = (h ^ p->count) * 0x01000193u;
-            h = (h ^ p->teximage) * 0x01000193u;
-            h = (h ^ p->pltt) * 0x01000193u;
+            h = (h ^ (p->teximage & 0x3ff00000u)) * 0x01000193u; // format, size, repeat, flip, colour 0
             h = (h ^ (p->attr & ~0x001f0000u)) * 0x01000193u;
             for (int v = 0; v < p->count; v++) {
                 const GxVertex *g = &f->vertices[p->first + v];
-                h = (h ^ ((uint32_t) (uint16_t) g->s | (uint32_t) (uint16_t) g->t << 16)) * 0x01000193u;
                 sx += g->x;
                 sy += g->y;
                 sw += g->w;
