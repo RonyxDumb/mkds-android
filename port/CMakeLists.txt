@@ -43,6 +43,7 @@ target_compile_options(game PRIVATE
     -fno-strict-aliasing   # the game type-puns freely
     -fwrapv                # and relies on wrapping arithmetic
     -fcommon               # tentative definitions shared between files, as CodeWarrior allows
+    -fshort-wchar          # wchar_t is 16 bits on the DS
     -ffunction-sections
     -w)
 # Plain char: unsigned in game code, signed in the libraries (tools/project.py).
@@ -85,7 +86,8 @@ target_link_libraries(mkds PRIVATE -Wl,--whole-archive game -Wl,--no-whole-archi
 if (ANDROID)
     target_link_libraries(mkds PRIVATE android log EGL GLESv3 aaudio m)
 endif()
-target_link_options(mkds PRIVATE -Wl,--no-undefined -Wl,--error-limit=0)
+# The game writes to some of its constant data (pointers patched into tables): no read-only relocations.
+target_link_options(mkds PRIVATE -Wl,--no-undefined -Wl,--error-limit=0 -Wl,-z,norelro)
 if (ANDROID)
     target_link_options(mkds PRIVATE -Wl,-z,max-page-size=16384)
 endif()

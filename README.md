@@ -31,9 +31,18 @@ Goals: 16:9 widescreen, 120/240 fps presentation, high internal resolution.
   high frame rates interpolate between consecutive game frames.
 
 ## Status
-- [x] Decomp compiles with clang (syntax level) apart from SDK hardware files
-- [ ] Platform layer: memory map, OS, file system
-- [ ] 2D/3D renderer (GLES 3)
-- [ ] Sound
-- [ ] Android app, input, saves
+- [x] The whole decomp compiles with clang (ARMv7 Android, 32-bit Linux for tests)
+- [x] Platform layer: memory map, OS threads/interrupts/alarms, DMA, card + save, firmware NVRAM, services
+- [x] Boots to the menus and runs races (host test build, software renderer)
+- [ ] OpenGL ES 3 renderer (high resolution)
+- [ ] Android app: input, ROM import, audio output, saves
+- [ ] Sound driver (sequence player, mixer)
 - [ ] Widescreen, 120/240 fps
+
+## Testing on Linux
+```shell
+CC=clang CFLAGS=-m32 LDFLAGS="-m32 -fuse-ld=lld" cmake -S port -B build/host -G Ninja
+ninja -C build/host
+build/host/mkds rom.nds --frames 1800 --dump-every 100 --out frames --press 330:A:4
+```
+Runs headless on a virtual clock and writes both screens as PNG.

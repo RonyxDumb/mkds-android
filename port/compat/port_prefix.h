@@ -15,3 +15,18 @@
 #define snprintf port_snprintf
 #define vsprintf port_vsprintf
 #define vsnprintf port_vsnprintf
+
+/* wchar_t is 16 bits on the DS (-fshort-wchar); the host C library's wide functions use 32 bits. */
+#define wcschr port_wcschr
+#define wcscpy port_wcscpy
+#define wcslen port_wcslen
+#define wcsncat port_wcsncat
+#define wcsncmp port_wcsncmp
+#define wcsncpy port_wcsncpy
+#define wmemchr port_wmemchr
+#define wmemcpy port_wmemcpy
+#define swprintf port_swprintf
+#define vswprintf port_vswprintf
+#define mbstowcs port_mbstowcs
+#define wcstombs port_wcstombs
+#define wctomb port_wctomb
