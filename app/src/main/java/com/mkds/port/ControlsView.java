@@ -122,6 +122,15 @@ final class ControlsView extends View {
     }
 
     private int mPulseButtons;
+    private boolean mGamepadMode; // a gamepad is connected: the on-screen buttons and stick are hidden
+
+    void setGamepadMode(boolean on) {
+        mGamepadMode = on;
+        mFingers.clear();
+        mTouchButtons = 0;
+        send();
+        invalidate();
+    }
 
     /** Presses buttons for a moment (the system back gesture pauses a race with START). */
     void pulse(int buttons) {
@@ -151,6 +160,7 @@ final class ControlsView extends View {
     private int buttonsAt(float x, float y) {
         int bits = 0;
         for (Button b : mButtons) {
+            if (mGamepadMode && b.bits != SWAP) continue;
             if (b.hit(x, y, 1.25f)) bits |= b.bits;
         }
         return bits;
@@ -183,6 +193,8 @@ final class ControlsView extends View {
                 }
             } else if (mTouchRect.width() > 0 && mTouchRect.contains(x, y)) {
                 f.role = ROLE_STYLUS;
+            } else if (mGamepadMode) {
+                f.role = ROLE_BUTTONS; // nothing under it
             } else if (x < mWidth * 0.5f) {
                 f.role = ROLE_STICK;
             } else {
@@ -243,6 +255,7 @@ final class ControlsView extends View {
     protected void onDraw(Canvas c) {
         int pressed = mTouchButtons | mPadButtons | mStickButtons;
         for (Button b : mButtons) {
+            if (mGamepadMode && b.bits != SWAP) continue;
             boolean on = b.bits != SWAP && (pressed & b.bits) == b.bits;
             mFill.setColor(on ? 0x80ffffff : 0x38000000);
             c.drawCircle(b.x, b.y, b.r, mFill);
@@ -262,7 +275,7 @@ final class ControlsView extends View {
             mFill.setColor(0x70ffffff);
             c.drawCircle(f.x, f.y, mUnit * 0.5f, mFill);
         }
-        if (mFingers.size() == 0 || !hasStick()) {
+        if (!mGamepadMode && (mFingers.size() == 0 || !hasStick())) {
             // Where the stick goes.
             mRing.setAlpha(0x30);
             c.drawCircle(mUnit * 2.2f, mHeight - mUnit * 2.2f, mUnit * 1.2f, mRing);

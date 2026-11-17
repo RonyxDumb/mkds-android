@@ -164,6 +164,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         mControls = new ControlsView(this);
         root.addView(surface);
         root.addView(mControls);
+        mGamepad = false;
+        updateGamepads(false);
         setContentView(root);
         hideSystemBars();
         preferHighRefreshRate();
@@ -254,14 +256,69 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     // ------------------------------------------------------------------------------------------ gamepads
+    // A gamepad (USB or Bluetooth) hides the on-screen controls; when the last one goes away during a race the game
+    // pauses and the on-screen controls come back.
+    private final android.hardware.input.InputManager.InputDeviceListener mDeviceListener =
+            new android.hardware.input.InputManager.InputDeviceListener() {
+                @Override
+                public void onInputDeviceAdded(int deviceId) { updateGamepads(false); }
+
+                @Override
+                public void onInputDeviceRemoved(int deviceId) { updateGamepads(true); }
+
+                @Override
+                public void onInputDeviceChanged(int deviceId) { updateGamepads(false); }
+            };
+    private boolean mGamepad;
+
+    private static boolean isGamepad(InputDevice d) {
+        if (d == null || d.isVirtual()) return false;
+        int s = d.getSources();
+        return (s & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+                || (s & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+    }
+
+    private void updateGamepads(boolean removed) {
+        boolean any = false;
+        for (int id : InputDevice.getDeviceIds()) {
+            if (isGamepad(InputDevice.getDevice(id))) any = true;
+        }
+        if (any == mGamepad) return;
+        mGamepad = any;
+        if (mControls == null) return;
+        if (!any) {
+            mPadButtons = 0;
+            mControls.setPadButtons(0);
+            mControls.setStickButtons(0);
+            if (removed && Native.isRace()) mControls.pulse(Native.START); // pause
+        }
+        mControls.setGamepadMode(any);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        android.hardware.input.InputManager im = getSystemService(android.hardware.input.InputManager.class);
+        im.registerInputDeviceListener(mDeviceListener, null);
+        updateGamepads(false);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        getSystemService(android.hardware.input.InputManager.class).unregisterInputDeviceListener(mDeviceListener);
+    }
+
     private static int buttonFor(int keyCode) {
         switch (keyCode) {
             case KeyEvent.KEYCODE_BUTTON_A: return Native.A;
             case KeyEvent.KEYCODE_BUTTON_B: return Native.B;
             case KeyEvent.KEYCODE_BUTTON_X: return Native.X;
             case KeyEvent.KEYCODE_BUTTON_Y: return Native.Y;
-            case KeyEvent.KEYCODE_BUTTON_L1: return Native.L;
-            case KeyEvent.KEYCODE_BUTTON_R1: return Native.R;
+            case KeyEvent.KEYCODE_BUTTON_L1:
+            case KeyEvent.KEYCODE_BUTTON_L2: return Native.L;
+            case KeyEvent.KEYCODE_BUTTON_R1:
+            case KeyEvent.KEYCODE_BUTTON_R2: return Native.R;
             case KeyEvent.KEYCODE_BUTTON_START: return Native.START;
             case KeyEvent.KEYCODE_BUTTON_SELECT: return Native.SELECT;
             case KeyEvent.KEYCODE_DPAD_UP: return Native.UP;

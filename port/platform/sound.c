@@ -415,6 +415,8 @@ static Channel *alloc_channel(int type, uint16_t mask, int prio) {
 static void note_on(Track *t, int key, int velocity, int length) {
     Player *pl = &s_players[t->player];
     Inst inst;
+    // Tie mode: notes are joined, a note does not end with its length (the next one takes its channel over).
+    if (t->tie) length = -1;
     if (!bank_instrument(pl->bank, t->program, key, &inst)) return;
     const uint8_t *p = inst.param;
     if (inst.type == 5) return; // null instrument
@@ -850,10 +852,10 @@ static void update_channel_params(Channel *c) {
     if (g_snd_keyon_log && !c->logged) {
         c->logged = true;
         double period = c->base_timer * pow(2.0, -pitch / 768.0);
-        port_log("keyon %llu ch%d fmt%d src %07x tmr %04x vol %d pan %d", (unsigned long long) g_frame_count,
+        port_log("keyon %llu ch%d fmt%d src %07x tmr %04x vol %d pan %d p%d", (unsigned long long) g_frame_count,
                  (int) (c - s_ch), c->type == CH_PCM ? c->format : c->type == CH_PSG ? 3 : 4,
                  (unsigned) (uintptr_t) (c->data ? c->data : 0), (unsigned) (0x10000 - (int) period), db,
-                 pan + 64);
+                 pan + 64, t ? t->player : -1);
     }
     c->step = rate / s_output_rate;
 }
