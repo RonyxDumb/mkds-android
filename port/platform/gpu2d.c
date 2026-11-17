@@ -131,6 +131,7 @@ typedef struct Engine {
     // the screen edges in races (hud_shift).
     int margin;
     bool hud_shift;
+    int8_t obj_shift[128]; // hud_shift: -1 / 0 / 1 margin for each sprite
     int ext_bg; // the layer drawn across the whole width, -1 none
     // A still picture as the extended layer: beyond the DS screen it shows its edge colours, blurred vertically
     // (per line, BGR555 | 0x8000 when opaque), fading a little towards the outside, instead of repeating.
@@ -306,6 +307,62 @@ static void draw_bg_line(const Engine *e, int bg, int y, uint16_t *out) {
 static const uint8_t s_obj_w[3][4] = {{8, 16, 32, 64}, {16, 32, 32, 64}, {8, 8, 16, 32}};
 static const uint8_t s_obj_h[3][4] = {{8, 16, 32, 64}, {8, 8, 16, 32}, {16, 32, 32, 64}};
 
+// Race HUD in widescreen: sprites that touch each other form groups (a counter, a word); a group lying by a side of
+// the DS screen moves out to that side of the wide screen, one across the middle (titles) stays.
+static void plan_hud_shift(Engine *e) {
+    const uint16_t *oam = (const uint16_t *) (e->f->oam + (e->is_a ? 0 : 0x400));
+    int x0[128], x1[128], y0[128], y1[128], group[128];
+    bool on[128];
+    for (int i = 0; i < 128; i++) {
+        const uint16_t *a = oam + i * 4;
+        uint16_t a0 = a[0], a1 = a[1];
+        bool affine = a0 & 0x100;
+        uint32_t shape = (a0 >> 14) & 3, size = (a1 >> 14) & 3;
+        on[i] = (affine || !(a0 & 0x200)) && shape != 3;
+        group[i] = i;
+        e->obj_shift[i] = 0;
+        if (!on[i]) continue;
+        int w = s_obj_w[shape][size], h = s_obj_h[shape][size];
+        if (affine && (a0 & 0x200)) w *= 2, h *= 2;
+        int x = a1 & 0x1ff, y = a0 & 0xff;
+        if (x >= 256) x -= 512;
+        if (y >= 192) y -= 256;
+        x0[i] = x, x1[i] = x + w, y0[i] = y, y1[i] = y + h;
+        if (x1[i] <= 0 || x0[i] >= 256 || y1[i] <= 0 || y0[i] >= 192) on[i] = false; // off screen
+    }
+    // Groups: overlapping vertically and at most a space apart horizontally (words of a title stay together).
+    for (int i = 0; i < 128; i++) {
+        if (!on[i]) continue;
+        for (int j = i + 1; j < 128; j++) {
+            if (!on[j]) continue;
+            if (y0[i] >= y1[j] || y0[j] >= y1[i]) continue;
+            if (x0[i] > x1[j] + 16 || x0[j] > x1[i] + 16) continue;
+            int a = i, b = j;
+            while (group[a] != a) a = group[a];
+            while (group[b] != b) b = group[b];
+            if (a != b) group[b < a ? a : b] = b < a ? b : a;
+        }
+    }
+    int gx0[128], gx1[128];
+    for (int i = 0; i < 128; i++) gx0[i] = 1000, gx1[i] = -1000;
+    for (int i = 0; i < 128; i++) {
+        if (!on[i]) continue;
+        int g = i;
+        while (group[g] != g) g = group[g];
+        group[i] = g;
+        if (x0[i] < gx0[g]) gx0[g] = x0[i];
+        if (x1[i] > gx1[g]) gx1[g] = x1[i];
+    }
+    for (int i = 0; i < 128; i++) {
+        if (!on[i]) continue;
+        int g = group[i], w = gx1[g] - gx0[g], cx = (gx0[g] + gx1[g]) / 2;
+        if (w > 128) continue; // spans the screen
+        if (cx < 72) e->obj_shift[i] = -1;
+        else if (cx > 184) e->obj_shift[i] = 1;
+    }
+}
+
+
 static void draw_objs(const Engine *e, int y, Line *line) {
     const uint16_t *oam = (const uint16_t *) (e->f->oam + (e->is_a ? 0 : 0x400));
     bool map1d = e->dispcnt & 0x10;
@@ -329,12 +386,7 @@ static void draw_objs(const Engine *e, int y, Line *line) {
         if (dy >= bh) continue;
         int ox = a1 & 0x1ff;
         if (ox >= 256) ox -= 512;
-        if (e->hud_shift && bw <= 64) {
-            // Race HUD near a side of the DS screen: to the same side of the wide screen.
-            int cx = ox + bw / 2;
-            if (cx < 72 && cx >= 0) ox -= e->margin;
-            else if (cx > 184 && cx < 256) ox += e->margin;
-        }
+        if (e->hud_shift) ox += e->obj_shift[i] * e->margin;
         uint32_t mode = (a0 >> 10) & 3;
         uint32_t prio = (a2 >> 10) & 3;
         uint32_t tile = a2 & 0x3ff;
@@ -680,6 +732,7 @@ static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a,
     e.dispcnt = io32(&e, 0);
     e.margin = margin;
     e.hud_shift = margin > 0 && is_a && f->scene == 2 && (e.dispcnt & 8);
+    if (e.hud_shift) plan_hud_shift(&e);
     e.ext_bg = margin > 0 ? bottom_layer(&e) : -1;
     if (e.ext_bg == 4) e.ext_bg = -1;
     e.side[0] = e.side[1] = NULL;
