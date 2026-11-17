@@ -145,6 +145,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--save") && i + 1 < argc) save = argv[++i];
         else if (!strcmp(argv[i], "--press") && i + 1 < argc) parse_press(argv[++i]);
         else if (!strcmp(argv[i], "--realtime")) rate = 59826;
+        else if (!strcmp(argv[i], "--keyon")) {
+            extern bool g_snd_keyon_log;
+            g_snd_keyon_log = true;
+        }
         else if (!strcmp(argv[i], "--wav") && i + 1 < argc) {
             s_wav = fopen(argv[++i], "wb");
             wav_header(s_wav, 0);

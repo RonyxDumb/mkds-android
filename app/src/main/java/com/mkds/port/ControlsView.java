@@ -4,90 +4,116 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.util.SparseArray;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 
 /**
- * Screen layout and touch controls. Landscape: the top screen fills the height on the left, the bottom (touch) screen
- * sits at the top right; the on-screen buttons are drawn over the free areas. Touches on the bottom screen go to the
- * game as stylus input.
+ * Screen layout and touch controls for playing on a phone in landscape.
+ *
+ * The main screen (the top one, or the touch screen after a swap) is as large as the height allows, the other one sits
+ * small in the top right corner. Controls:
+ *  - left half: a floating stick that appears where the thumb lands and stays with that finger (the D-pad);
+ *  - right side: a big A with R right above it (one thumb between them holds both: accelerate and drift), B, L (item),
+ *    X and Y; a finger can slide from button to button;
+ *  - top: SELECT, START and the screen swap.
+ * Touches on the touch screen go to the game as stylus input.
  */
 final class ControlsView extends View {
     private static final class Button {
         final int bits;
         final String label;
-        final RectF rect = new RectF();
+        float x, y, r;
 
         Button(int bits, String label) {
             this.bits = bits;
             this.label = label;
         }
+
+        boolean hit(float px, float py, float scale) {
+            float dx = px - x, dy = py - y, rr = r * scale;
+            return dx * dx + dy * dy <= rr * rr;
+        }
     }
 
-    private final Button[] mButtons = {
-        new Button(Native.UP, "▲"), new Button(Native.DOWN, "▼"), new Button(Native.LEFT, "◀"),
-        new Button(Native.RIGHT, "▶"), new Button(Native.UP | Native.LEFT, ""), new Button(Native.UP | Native.RIGHT, ""),
-        new Button(Native.DOWN | Native.LEFT, ""), new Button(Native.DOWN | Native.RIGHT, ""),
-        new Button(Native.A, "A"), new Button(Native.B, "B"), new Button(Native.X, "X"), new Button(Native.Y, "Y"),
-        new Button(Native.L, "L"), new Button(Native.R, "R"), new Button(Native.START, "START"),
-        new Button(Native.SELECT, "SELECT"),
-    };
-    private final RectF mTop = new RectF(), mBottom = new RectF();
-    private final Paint mFill = new Paint(Paint.ANTI_ALIAS_FLAG), mText = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private static final int SWAP = 1 << 30; // not a DS button
+
+    private final Button mA = new Button(Native.A, "A"), mB = new Button(Native.B, "B"), mX = new Button(Native.X, "X"),
+            mY = new Button(Native.Y, "Y"), mL = new Button(Native.L, "L"), mR = new Button(Native.R, "R"),
+            mStart = new Button(Native.START, "START"), mSelect = new Button(Native.SELECT, "SELECT"),
+            mSwap = new Button(SWAP, "⇄");
+    private final Button[] mButtons = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mSwap};
+
+    // What each finger does, by pointer id.
+    private static final int ROLE_BUTTONS = 0, ROLE_STICK = 1, ROLE_STYLUS = 2;
+
+    private static final class Finger {
+        int role;
+        float x0, y0, x, y;
+    }
+
+    private final SparseArray<Finger> mFingers = new SparseArray<>();
+    private final RectF mMain = new RectF(), mSmall = new RectF();
+    private RectF mTouchRect = mSmall;
+    private boolean mSwapped;
+    private int mWidth, mHeight;
+    private float mUnit;
+    private final Paint mFill = new Paint(Paint.ANTI_ALIAS_FLAG), mText = new Paint(Paint.ANTI_ALIAS_FLAG),
+            mRing = new Paint(Paint.ANTI_ALIAS_FLAG);
     private int mTouchButtons, mPadButtons, mStickButtons;
     private boolean mTouching;
     private int mTouchX, mTouchY;
 
     ControlsView(Context context) {
         super(context);
-        mFill.setColor(0x40ffffff);
-        mText.setColor(0xa0ffffff);
+        mText.setColor(0xc0ffffff);
         mText.setTextAlign(Paint.Align.CENTER);
+        mText.setFakeBoldText(true);
+        mRing.setStyle(Paint.Style.STROKE);
+        mRing.setColor(0x60ffffff);
     }
 
     void layoutScreens(int w, int h) {
-        float topW = h * 4f / 3f;
-        if (topW > w * 0.62f) topW = w * 0.62f;
-        float topH = topW * 3f / 4f;
-        mTop.set(0, (h - topH) / 2, topW, (h + topH) / 2);
-        float bw = w - topW, bh = bw * 3f / 4f;
-        if (bh > h * 0.62f) {
-            bh = h * 0.62f;
-            bw = bh * 4f / 3f;
-        }
-        mBottom.set(w - bw, 0, w, bh);
-        Native.setLayout(Math.round(mTop.left), Math.round(mTop.top), Math.round(mTop.width()), Math.round(mTop.height()),
-                Math.round(mBottom.left), Math.round(mBottom.top), Math.round(mBottom.width()),
-                Math.round(mBottom.height()));
+        mWidth = w;
+        mHeight = h;
+        float u = mUnit = Math.min(h / 8f, w / 15f);
+        // Screens.
+        float mainW = Math.min(h * 4f / 3f, w * 0.72f), mainH = mainW * 3f / 4f;
+        float margin = (w - mainW) / 2;
+        float smallW = Math.max(margin, u * 3.2f), smallH = smallW * 3f / 4f;
+        float left = Math.max(0, Math.min(margin, w - mainW - smallW));
+        mMain.set(left, (h - mainH) / 2, left + mainW, (h + mainH) / 2);
+        mSmall.set(w - smallW, 0, w, smallH);
+        applyScreens();
 
-        float u = h / 9f; // button unit
-        mText.setTextSize(u * 0.45f);
-        // D-pad, bottom left over the top screen.
-        float cx = u * 1.8f, cy = h - u * 1.8f;
-        set(0, cx, cy - u, u); // up
-        set(1, cx, cy + u, u); // down
-        set(2, cx - u, cy, u); // left
-        set(3, cx + u, cy, u); // right
-        set(4, cx - u, cy - u, u);
-        set(5, cx + u, cy - u, u);
-        set(6, cx - u, cy + u, u);
-        set(7, cx + u, cy + u, u);
-        // A B X Y, bottom right under the touch screen.
-        float ax = w - u * 1.6f, ay = h - u * 2.0f;
-        set(8, ax + u * 0.0f, ay, u * 1.1f);            // A
-        set(9, ax - u * 1.1f, ay + u * 1.0f, u * 1.1f); // B
-        set(10, ax - u * 1.1f, ay - u * 1.0f, u * 1.1f); // X
-        set(11, ax - u * 2.2f, ay, u * 1.1f);            // Y
-        // L, R, START, SELECT.
-        mButtons[12].rect.set(0, mTop.top, u * 2.2f, mTop.top + u * 1.1f);
-        mButtons[13].rect.set(mBottom.left - u * 2.2f, mTop.top, mBottom.left, mTop.top + u * 1.1f);
-        mButtons[14].rect.set(mBottom.left, h - u * 0.9f, mBottom.left + u * 2.2f, h);
-        mButtons[15].rect.set(mBottom.left, h - u * 1.9f, mBottom.left + u * 2.2f, h - u * 1.0f);
+        // Right hand: A big, R above it, close enough for one thumb to cover both; B to the left of A; L and X/Y above B.
+        place(mA, w - u * 1.45f, h - u * 1.55f, u * 0.95f);
+        place(mR, w - u * 1.45f, h - u * 3.55f, u * 0.8f);
+        place(mB, w - u * 3.45f, h - u * 1.1f, u * 0.75f);
+        place(mL, w - u * 3.45f, h - u * 2.9f, u * 0.7f);
+        place(mX, w - u * 3.1f, h - u * 4.55f, u * 0.5f);
+        place(mY, w - u * 4.75f, h - u * 2.0f, u * 0.5f);
+        // Top: SELECT, START, swap.
+        place(mSelect, w / 2f - u * 1.3f, u * 0.4f, u * 0.38f);
+        place(mStart, w / 2f + u * 1.3f, u * 0.4f, u * 0.38f);
+        place(mSwap, u * 0.6f, u * 0.6f, u * 0.45f);
+        mText.setTextSize(u * 0.42f);
+        mRing.setStrokeWidth(u * 0.06f);
         invalidate();
     }
 
-    private void set(int i, float x, float y, float size) {
-        mButtons[i].rect.set(x - size / 2, y - size / 2, x + size / 2, y + size / 2);
+    private void applyScreens() {
+        RectF top = mSwapped ? mSmall : mMain, bottom = mSwapped ? mMain : mSmall;
+        mTouchRect = bottom;
+        Native.setLayout(Math.round(top.left), Math.round(top.top), Math.round(top.width()), Math.round(top.height()),
+                Math.round(bottom.left), Math.round(bottom.top), Math.round(bottom.width()), Math.round(bottom.height()));
+    }
+
+    private static void place(Button b, float x, float y, float r) {
+        b.x = x;
+        b.y = y;
+        b.r = r;
     }
 
     void setPadButtons(int b) {
@@ -104,33 +130,87 @@ final class ControlsView extends View {
         Native.setInput(mTouchButtons | mPadButtons | mStickButtons, mTouching, mTouchX, mTouchY);
     }
 
+    // Buttons under a point: slightly larger than drawn, so that a thumb between A and R holds both.
+    private int buttonsAt(float x, float y) {
+        int bits = 0;
+        for (Button b : mButtons) {
+            if (b.hit(x, y, 1.25f)) bits |= b.bits;
+        }
+        return bits;
+    }
+
+    private int stickDirection(Finger f) {
+        float dx = f.x - f.x0, dy = f.y - f.y0, dead = mUnit * 0.3f;
+        int bits = 0;
+        // Wide left/right sectors (steering), narrower up/down.
+        if (Math.abs(dx) > dead && Math.abs(dx) > Math.abs(dy) * 0.45f) bits |= dx < 0 ? Native.LEFT : Native.RIGHT;
+        if (Math.abs(dy) > dead && Math.abs(dy) > Math.abs(dx) * 0.45f) bits |= dy < 0 ? Native.UP : Native.DOWN;
+        return bits;
+    }
+
     @Override
     public boolean onTouchEvent(MotionEvent e) {
-        int buttons = 0;
-        boolean touching = false;
         int action = e.getActionMasked();
-        for (int i = 0; i < e.getPointerCount(); i++) {
-            if ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) && i == e.getActionIndex()) {
-                continue;
+        int index = e.getActionIndex();
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+            float x = e.getX(index), y = e.getY(index);
+            Finger f = new Finger();
+            f.x0 = f.x = x;
+            f.y0 = f.y = y;
+            int bits = buttonsAt(x, y);
+            if (bits != 0) {
+                f.role = ROLE_BUTTONS;
+                if ((bits & SWAP) != 0) {
+                    mSwapped = !mSwapped;
+                    applyScreens();
+                }
+            } else if (mTouchRect.contains(x, y)) {
+                f.role = ROLE_STYLUS;
+            } else if (x < mWidth * 0.5f) {
+                f.role = ROLE_STICK;
+            } else {
+                f.role = ROLE_BUTTONS;
             }
-            if (action == MotionEvent.ACTION_CANCEL) break;
-            float x = e.getX(i), y = e.getY(i);
-            boolean onButton = false;
-            for (Button b : mButtons) {
-                if (b.rect.contains(x, y)) {
-                    buttons |= b.bits;
-                    onButton = true;
+            mFingers.put(e.getPointerId(index), f);
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
+            mFingers.remove(e.getPointerId(index));
+        } else if (action == MotionEvent.ACTION_CANCEL) {
+            mFingers.clear();
+        }
+        for (int i = 0; i < e.getPointerCount(); i++) {
+            Finger f = mFingers.get(e.getPointerId(i));
+            if (f == null) continue;
+            f.x = e.getX(i);
+            f.y = e.getY(i);
+            if (f.role == ROLE_STICK) {
+                // The stick follows a thumb that moves far: its centre stays within reach.
+                float dx = f.x - f.x0, dy = f.y - f.y0, max = mUnit * 1.2f, d = (float) Math.hypot(dx, dy);
+                if (d > max) {
+                    f.x0 = f.x - dx * max / d;
+                    f.y0 = f.y - dy * max / d;
                 }
             }
-            if (!onButton && mBottom.contains(x, y)) {
+        }
+
+        int buttons = 0;
+        boolean touching = false;
+        for (int i = 0; i < mFingers.size(); i++) {
+            Finger f = mFingers.valueAt(i);
+            switch (f.role) {
+            case ROLE_STICK:
+                buttons |= stickDirection(f);
+                break;
+            case ROLE_STYLUS:
                 touching = true;
-                mTouchX = Math.min(255, Math.max(0, (int) ((x - mBottom.left) * 256 / mBottom.width())));
-                mTouchY = Math.min(191, Math.max(0, (int) ((y - mBottom.top) * 192 / mBottom.height())));
+                mTouchX = clamp((int) ((f.x - mTouchRect.left) * 256 / mTouchRect.width()), 255);
+                mTouchY = clamp((int) ((f.y - mTouchRect.top) * 192 / mTouchRect.height()), 191);
+                break;
+            default:
+                buttons |= buttonsAt(f.x, f.y) & ~SWAP;
+                break;
             }
         }
-        if (buttons != mTouchButtons) {
-            performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY);
-        }
+        if ((buttons & ~mTouchButtons) != 0) performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
         mTouchButtons = buttons;
         mTouching = touching;
         send();
@@ -138,14 +218,45 @@ final class ControlsView extends View {
         return true;
     }
 
+    private static int clamp(int v, int max) {
+        return Math.max(0, Math.min(max, v));
+    }
+
     @Override
     protected void onDraw(Canvas c) {
         int pressed = mTouchButtons | mPadButtons | mStickButtons;
         for (Button b : mButtons) {
-            if (b.label.isEmpty()) continue;
-            mFill.setColor((pressed & b.bits) == b.bits ? 0x70ffffff : 0x30ffffff);
-            c.drawRoundRect(b.rect, b.rect.height() / 4, b.rect.height() / 4, mFill);
-            c.drawText(b.label, b.rect.centerX(), b.rect.centerY() - (mText.descent() + mText.ascent()) / 2, mText);
+            boolean on = b.bits != SWAP && (pressed & b.bits) == b.bits;
+            mFill.setColor(on ? 0x80ffffff : 0x38000000);
+            c.drawCircle(b.x, b.y, b.r, mFill);
+            c.drawCircle(b.x, b.y, b.r, mRing);
+            float size = mText.getTextSize();
+            if (b.label.length() > 2) mText.setTextSize(b.r * 0.55f);
+            c.drawText(b.label, b.x, b.y - (mText.descent() + mText.ascent()) / 2, mText);
+            mText.setTextSize(size);
         }
+        // The stick under the thumb.
+        for (int i = 0; i < mFingers.size(); i++) {
+            Finger f = mFingers.valueAt(i);
+            if (f.role != ROLE_STICK) continue;
+            mFill.setColor(0x30000000);
+            c.drawCircle(f.x0, f.y0, mUnit * 1.2f, mFill);
+            c.drawCircle(f.x0, f.y0, mUnit * 1.2f, mRing);
+            mFill.setColor(0x70ffffff);
+            c.drawCircle(f.x, f.y, mUnit * 0.5f, mFill);
+        }
+        if (mFingers.size() == 0 || !hasStick()) {
+            // Where the stick goes.
+            mRing.setAlpha(0x30);
+            c.drawCircle(mUnit * 2.2f, mHeight - mUnit * 2.2f, mUnit * 1.2f, mRing);
+            mRing.setAlpha(0x60);
+        }
+    }
+
+    private boolean hasStick() {
+        for (int i = 0; i < mFingers.size(); i++) {
+            if (mFingers.valueAt(i).role == ROLE_STICK) return true;
+        }
+        return false;
     }
 }

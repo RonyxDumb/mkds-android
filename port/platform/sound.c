@@ -10,6 +10,7 @@
 #include "port.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "hostapi.h"
@@ -30,6 +31,7 @@
 
 static void *s_lock;
 static const bool s_debug = false; // log notes and sequences
+bool g_snd_keyon_log;                // tests: log each note's channel registers (compared with a reference)
 static void snd_lock(void) {
     if (!s_lock) s_lock = hapi_mutex_new();
     hapi_mutex_lock(s_lock);
@@ -94,6 +96,7 @@ typedef struct Channel {
     int adpcm_sample, adpcm_index, adpcm_pos;
     int loop_sample, loop_index;
     bool loop_saved;
+    bool logged;
     int last_sample;
     // pitch / volume
     uint16_t base_timer;
@@ -340,6 +343,7 @@ static void track_stop(Track *t, bool kill) {
                 channel_stop(c);
             } else {
                 c->env_state = ENV_RELEASE;
+                c->priority = 1;
                 c->length = -1;
                 c->track = -1;
             }
@@ -433,13 +437,28 @@ static void note_on(Track *t, int key, int velocity, int length) {
     }
     uint16_t mask = t->mask_set ? t->channel_mask : 0xffff;
     c = alloc_channel(type, mask, prio);
-    if (!c) return;
+    if (!c) {
+        if (g_snd_keyon_log) {
+            char st[200]; int n = 0;
+            for (int i = 0; i < CHANNELS; i++) n += snprintf(st + n, sizeof(st) - n, " %d:%d/%d/%d", i, s_ch[i].active, s_ch[i].sequenced, s_ch[i].priority);
+            port_log("keyfail %llu key %d prio %d mask %04x locked %04x%s", (unsigned long long) g_frame_count, key, prio, mask, s_locked_channels, st);
+        }
+        return;
+    }
     memset(c, 0, sizeof(*c));
     c->type = type;
     if (type == CH_PCM) {
         // PCM: wave index and archive; direct PCM: the wave's address.
         const uint8_t *swav = inst.type == 4 ? (const uint8_t *) (uintptr_t) rd32(p) : bank_wave(pl->bank, rd16(p + 2), rd16(p));
-        if (!swav) return;
+        if (!swav) {
+            if (g_snd_keyon_log) {
+                const uint8_t *swar = (const uint8_t *) (uintptr_t) rd32(pl->bank + 0x18 + rd16(p + 2) * 8);
+                port_log("nowave bank %p arc %d index %d swar %p count %u off %08x", (void *) pl->bank, rd16(p + 2), rd16(p),
+                         (void *) swar, swar ? rd32(swar + 0x38) : 0, swar ? rd32(swar + 0x3c + rd16(p) * 4) : 0);
+            }
+            channel_stop(c);
+            return;
+        }
         channel_start_wave(c, swav);
     } else if (type == CH_PSG) {
         c->duty = rd16(p);
@@ -539,7 +558,7 @@ static bool track_step(Track *t) {
         }
         t->note_finish_wait = false;
     }
-    for (int guard = 0; guard < 10000 && t->wait == 0; guard++) {
+    for (int guard = 0; guard < 10000 && t->wait == 0 && !t->note_finish_wait; guard++) {
         uint8_t cmd = *t->cur++;
         int arg_type = -1;
         bool run = true;
@@ -716,6 +735,7 @@ static void player_tick(int p) {
         if (c->active && c->sequenced && c->track >= 0 && s_tracks[c->track].player == p && c->length > 0) {
             if (--c->length == 0) {
                 c->env_state = ENV_RELEASE;
+                c->priority = 1; // a released note is the first to give its channel away
                 c->length = -1;
             }
         }
@@ -804,6 +824,11 @@ static void update_channel_params(Channel *c) {
             }
         }
     }
+    // A released note ends as soon as it is inaudible (its channel is free again).
+    if (c->env_state == ENV_RELEASE && db <= -723) {
+        channel_stop(c);
+        return;
+    }
     if (db < -723) db = -723;
     if (db > 0) db = 0;
     float gain = powf(10.0f, db / 200.0f) * (s_master_volume / 127.0f);
@@ -814,6 +839,14 @@ static void update_channel_params(Channel *c) {
     c->gain_l = gain * (128 - p) / 128.0f;
     c->gain_r = gain * p / 128.0f;
     double rate = rate_for(c->base_timer, pitch);
+    if (g_snd_keyon_log && !c->logged) {
+        c->logged = true;
+        double period = c->base_timer * pow(2.0, -pitch / 768.0);
+        port_log("keyon %llu ch%d fmt%d src %07x tmr %04x vol %d pan %d", (unsigned long long) g_frame_count,
+                 (int) (c - s_ch), c->type == CH_PCM ? c->format : c->type == CH_PSG ? 3 : 4,
+                 (unsigned) (uintptr_t) (c->data ? c->data : 0), (unsigned) (0x10000 - (int) period), db,
+                 pan + 64);
+    }
     c->step = rate / s_output_rate;
 }
 
