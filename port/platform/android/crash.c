@@ -74,6 +74,29 @@ static void handler(int sig, siginfo_t *info, void *uc_) {
             put(fd, at.dli_sname);
             put(fd, "\n");
         }
+#elif defined(__aarch64__)
+        // The game code (the guest image, 32-bit pointers at 0x10000000) has no unwind tables: the backtrace stops
+        // at the signal frame, so the registers say where it happened (symbols: nm guest.elf).
+        ucontext_t *uc = uc_;
+        put_hex(fd, "pc ", uc->uc_mcontext.pc);
+        put_hex(fd, "lr ", uc->uc_mcontext.regs[30]);
+        put_hex(fd, "sp ", uc->uc_mcontext.sp);
+        for (int i = 0; i < 4; i++) {
+            char label[8] = {'x', (char) ('0' + i), ' ', 0};
+            put_hex(fd, label, uc->uc_mcontext.regs[i]);
+        }
+        if (uc->uc_mcontext.pc >= 0x10000000 && uc->uc_mcontext.pc < 0x20000000) put(fd, "in the game image\n");
+        // A few words of the guest stack: return addresses of the callers.
+        uint64_t sp = uc->uc_mcontext.sp;
+        if (sp >= 0x50000000 && sp < 0x58000000) {
+            put(fd, "stack:");
+            for (int i = 0; i < 24; i++) {
+                char w[16];
+                snprintf(w, sizeof(w), " %08x", ((const uint32_t *) (uintptr_t) sp)[i]);
+                put(fd, w);
+            }
+            put(fd, "\n");
+        }
 #else
         (void) uc_;
 #endif

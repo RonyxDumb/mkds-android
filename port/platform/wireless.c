@@ -2,6 +2,7 @@
 // request fails the way the SDK reports an unusable wireless module, and the game shows its error screens.
 // Generated from the decomp's prototypes (see git history); keep the signatures in sync with the headers.
 #include "port.h"
+#include <string.h>
 #include "types.h"
 #include "multiboot_checksum.h"
 #include "multiboot_communication.h"
@@ -21,6 +22,31 @@
 #include "wireless_system_commands.h"
 
 #define WM_ERRCODE_WM_DISABLE 4
+#define WM_ERRCODE_OPERATING 2
+
+// Shutting the wireless module down always works (the game retries until it does): accepted, and the callback reports
+// success a moment later, as the ARM7 would.
+typedef struct Deferred {
+    WirelessMessageCallback callback;
+    WirelessMessage message;
+} Deferred;
+static Deferred s_deferred[8];
+static int s_next_deferred;
+
+static void run_deferred(void *arg) {
+    Deferred *d = arg;
+    if (d->callback) d->callback(&d->message);
+}
+
+static s32 accept(WirelessMessageCallback callback, u16 command) {
+    Deferred *d = &s_deferred[s_next_deferred++ & 7];
+    memset(d, 0, sizeof(*d));
+    d->callback = callback;
+    d->message.mCommand = command;
+    d->message.mResultCode = 0;
+    port_os_defer(run_deferred, d);
+    return WM_ERRCODE_OPERATING;
+}
 void *MB_CommGetChildUser(u32 child) { (void) child; return NULL;}
 u32 MB_CommIsBootable(u32 child) { (void) child; return 0;}
 u32 MB_CommResponseRequest(u32 child, u32 pairIndex) { (void) child; (void) pairIndex; return 0;}
@@ -47,17 +73,17 @@ void MBi_SetBeaconRecvStatusBuffer(void *entryTable) { (void) entryTable; }
 void MBi_SetChildMPMaxSize(s32 packetSize) { (void) packetSize; }
 u8 *MBi_SetRecvBufferFromParent(ParentMessage *message, u8 *buffer) { (void) message; (void) buffer; return NULL;}
 void MBi_SetScanLockFunc(void (*setCallback)(const u8 *), void (*clearCallback)(void)) { }
-s32 WM_Disable(WirelessMessageCallback callback) { (void) callback; return WM_ERRCODE_WM_DISABLE;}
-s32 WM_Disconnect(WirelessMessageCallback callback, u32 aid) { (void) callback; (void) aid; return WM_ERRCODE_WM_DISABLE;}
-s32 WM_DisconnectChildren(WirelessMessageCallback callback, u32 aidBitmap) { (void) callback; (void) aidBitmap; return WM_ERRCODE_WM_DISABLE;}
+s32 WM_Disable(WirelessMessageCallback callback) { (void) callback; return accept(callback, 4);}
+s32 WM_Disconnect(WirelessMessageCallback callback, u32 aid) { (void) callback; (void) aid; return accept(callback, 13);}
+s32 WM_DisconnectChildren(WirelessMessageCallback callback, u32 aidBitmap) { (void) callback; (void) aidBitmap; return accept(callback, 13);}
 s32 WM_Enable(WirelessMessageCallback callback) { (void) callback; return WM_ERRCODE_WM_DISABLE;}
-s32 WM_End(WirelessMessageCallback callback) { (void) callback; return WM_ERRCODE_WM_DISABLE;}
-s32 WM_EndDCF(WirelessMessageCallback callback) { (void) callback; return WM_ERRCODE_WM_DISABLE;}
+s32 WM_End(WirelessMessageCallback callback) { (void) callback; return accept(callback, 2);}
+s32 WM_EndDCF(WirelessMessageCallback callback) { (void) callback; return accept(callback, 18);}
 int WM_EndDataSharing(WMDataSharingInfo *dsInfo) { (void) dsInfo; return WM_ERRCODE_WM_DISABLE;}
 int WM_EndKeySharing(WMDataSharingInfo *buf) { (void) buf; return WM_ERRCODE_WM_DISABLE;}
-s32 WM_EndMP(WirelessMessageCallback callback) { (void) callback; return WM_ERRCODE_WM_DISABLE;}
-s32 WM_EndParent(WirelessMessageCallback callback) { (void) callback; return WM_ERRCODE_WM_DISABLE;}
-s32 WM_EndScan(WirelessMessageCallback callback) { (void) callback; return WM_ERRCODE_WM_DISABLE;}
+s32 WM_EndMP(WirelessMessageCallback callback) { (void) callback; return accept(callback, 15);}
+s32 WM_EndParent(WirelessMessageCallback callback) { (void) callback; return accept(callback, 9);}
+s32 WM_EndScan(WirelessMessageCallback callback) { (void) callback; return accept(callback, 11);}
 s32 WM_Finish(void) { return WM_ERRCODE_WM_DISABLE;}
 u16 WM_GetAllowedChannel(void) { return 0;}
 u16 WM_GetDispersionBeaconPeriod(void) { return 0;}
@@ -69,10 +95,10 @@ u8 *WM_GetSharedDataAddress(WMDataSharingInfo *dsInfo, WMDataSet *receiveData, u
 s32 WM_Init(void *wmSysBuf, u16 dmaNo) { (void) wmSysBuf; (void) dmaNo; return WM_ERRCODE_WM_DISABLE;}
 s32 WM_Initialize(void *wmSysBuf, WirelessMessageCallback callback, u16 dmaNo) { (void) wmSysBuf; (void) callback; (void) dmaNo; return WM_ERRCODE_WM_DISABLE;}
 int WM_MeasureChannel(WirelessMessageCallback callback, u16 ccaMode, u16 edThreshold, u16 channel, u16 measureTime) { (void) callback; (void) ccaMode; (void) edThreshold; (void) channel; (void) measureTime; return WM_ERRCODE_WM_DISABLE;}
-s32 WM_PowerOff(WirelessMessageCallback callback) { (void) callback; return WM_ERRCODE_WM_DISABLE;}
+s32 WM_PowerOff(WirelessMessageCallback callback) { (void) callback; return accept(callback, 6);}
 s32 WM_PowerOn(WirelessMessageCallback callback) { (void) callback; return WM_ERRCODE_WM_DISABLE;}
 s32 WM_ReadStatus(void *statusBuf) { (void) statusBuf; return WM_ERRCODE_WM_DISABLE;}
-s32 WM_Reset(WirelessMessageCallback callback) { (void) callback; return WM_ERRCODE_WM_DISABLE;}
+s32 WM_Reset(WirelessMessageCallback callback) { (void) callback; return accept(callback, 1);}
 int WM_SetBeaconIndication(WirelessMessageCallback callback, u16 flag) { (void) callback; (void) flag; return WM_ERRCODE_WM_DISABLE;}
 s32 WM_SetDCFData(WirelessMessageCallback callback, const void *destAdr, void *sendData, u16 sendDataSize) { (void) callback; (void) destAdr; (void) sendData; (void) sendDataSize; return WM_ERRCODE_WM_DISABLE;}
 int WM_SetEntry(WirelessMessageCallback callback, BOOL enabled) { (void) callback; (void) enabled; return WM_ERRCODE_WM_DISABLE;}

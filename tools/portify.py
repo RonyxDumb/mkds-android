@@ -35,6 +35,9 @@ FIXUPS = [
     ("src/Main/System/main.c", r"^void main\(void\) \{", "void GameMain(void) {", 1),
     # VIEWPORT geometry command written by address.
     ("src/Main/Kart/kart_model_menu.c", r"\*\(u32 \*\) 0x4000580 = 0xbfff0000;", "PORT_IO_WRITE(reg_G3_VIEWPORT, 0xbfff0000);", 1),
+    # An empty label text given as an 8-bit "" to code that reads 16-bit text: on the DS the alignment padding after it
+    # ends the text; here the next string followed (runaway text, stack overflow in the multiplayer menu).
+    ("src/Main/Menu/multi_select_member_group.c", r'text = "";', 'text = (void *) L"";', 1),
     # Widescreen: the race and award ceremony cameras take the aspect ratio set by the platform (4:3 by default); the
     # renderer gives each polygon the shape of its own projection (GxPolygon.aspect), so other views stay 4:3.
     ("src/Main/Kart/kart_model_menu.c", r"camera->mAspectRatio = FIXED12_RATIO\(4, 3\);", "camera->mAspectRatio = g_port_aspect;", 1),
