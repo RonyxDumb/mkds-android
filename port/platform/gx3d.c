@@ -509,10 +509,10 @@ static void execute(uint32_t cmd) {
     case 0x25: G.vx = (int16_t) p[0]; G.vy = (int16_t) (p[0] >> 16); submit_vertex(); break;
     case 0x26: G.vx = (int16_t) p[0]; G.vz = (int16_t) (p[0] >> 16); submit_vertex(); break;
     case 0x27: G.vy = (int16_t) p[0]; G.vz = (int16_t) (p[0] >> 16); submit_vertex(); break;
-    case 0x28: // VTX_DIFF: 10-bit signed offsets, 1/8 units
-        G.vx = (int16_t) (G.vx + (sext10(p[0]) >> 3));
-        G.vy = (int16_t) (G.vy + (sext10(p[0] >> 10) >> 3));
-        G.vz = (int16_t) (G.vz + (sext10(p[0] >> 20) >> 3));
+    case 0x28: // VTX_DIFF: 10-bit signed offsets in the vertex units (4.12)
+        G.vx = (int16_t) (G.vx + sext10(p[0]));
+        G.vy = (int16_t) (G.vy + sext10(p[0] >> 10));
+        G.vz = (int16_t) (G.vz + sext10(p[0] >> 20));
         submit_vertex();
         break;
     case 0x29: G.polyattr_pending = p[0]; break;
