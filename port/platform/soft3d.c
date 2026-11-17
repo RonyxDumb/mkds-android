@@ -176,6 +176,7 @@ void soft3d_render(const Gx3dFrame *frame, const FrameSnapshot *f, uint32_t *out
     bool texturing = frame->disp3dcnt & 1;
     for (int pass = 0; pass < 2; pass++) {
         for (uint32_t i = 0; i < frame->polygon_count; i++) {
+            if (frame->polygons[i].hidden) continue;
             const GxPolygon *p = &frame->polygons[i];
             uint32_t alpha = (p->attr >> 16) & 31;
             bool fmt_alpha = ((p->teximage >> 26) & 7) == 1 || ((p->teximage >> 26) & 7) == 6;

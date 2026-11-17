@@ -9,8 +9,8 @@
 extern "C" {
 #endif
 
-#define GX_MAX_POLYGONS 4096
-#define GX_MAX_VERTICES 16384
+#define GX_MAX_POLYGONS 8192 // culled ones included (see GxPolygon.hidden)
+#define GX_MAX_VERTICES 32768
 
 typedef struct GxVertex {
     int32_t x, y, z, w; // clip space, 20.12 fixed point (before the viewport transform)
@@ -24,6 +24,8 @@ typedef struct GxPolygon {
     uint8_t count;       // 3 or 4
     uint8_t viewport[4]; // x1, y1, x2, y2 (DS screen coordinates, y up from the bottom as in VIEWPORT)
     uint8_t front;       // 1 when the polygon faces the viewer
+    uint8_t hidden;      // culled or outside the view: not drawn, kept so that models have the same polygons every
+                         // frame (frame interpolation pairs them up)
     uint32_t attr;       // POLYGON_ATTR latched at BEGIN_VTXS
     uint32_t teximage;   // TEXIMAGE_PARAM
     uint32_t pltt;       // PLTT_BASE

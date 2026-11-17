@@ -3,6 +3,7 @@
 #include "guest_if.h"
 #include "hostapi.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +42,37 @@ static void fail(const char *what) {
     _exit(1);
 }
 
+static void sleep_us(long us);
+
+// Audio on its own thread, so that copying frames never delays it: keeps the ring about 40 ms ahead of the output.
+static void *audio_thread(void *arg) {
+    (void) arg;
+    static int16_t chunk[1024 * 2];
+    for (;;) {
+        uint32_t audio_rate = atomic_load(&s->audio_rate);
+        if (audio_rate && !atomic_load(&s->paused)) {
+            uint32_t target = audio_rate / 25, burst = atomic_load(&s->audio_burst) * 3;
+            if (target < burst) target = burst;
+            if (target > IPC_AUDIO_RING / 2) target = IPC_AUDIO_RING / 2;
+            for (;;) {
+                uint32_t w = atomic_load(&s->audio_write), filled = w - atomic_load(&s->audio_read);
+                if (filled >= target) break;
+                uint32_t n = target - filled;
+                if (n > 1024) n = 1024;
+                guest_snd_render(chunk, (int) n, (int) audio_rate);
+                for (uint32_t i = 0; i < n; i++) {
+                    uint32_t at = (w + i) & (IPC_AUDIO_RING - 1);
+                    s->audio[at * 2] = chunk[i * 2];
+                    s->audio[at * 2 + 1] = chunk[i * 2 + 1];
+                }
+                atomic_store(&s->audio_write, w + n);
+            }
+        }
+        sleep_us(2000);
+    }
+    return NULL;
+}
+
 static void sleep_us(long us) {
     struct timespec ts = {0, us * 1000};
     nanosleep(&ts, NULL);
@@ -76,11 +108,12 @@ int main(int argc, char **argv) {
     PortInput *in = host_low_alloc(sizeof(*in));
     guest_start_game();
     atomic_store(&s->state, IPC_RUNNING);
+    pthread_t audio;
+    pthread_create(&audio, NULL, audio_thread, NULL);
     port_log("game process running");
 
     uint32_t back = 2; // the app reads slot 0 first, slot 1 is the middle one
     atomic_store(&s->frame_slot, 1);
-    static int16_t chunk[1024 * 2];
     for (;;) {
         if (atomic_load(&s->quit)) {
             guest_save_flush();
@@ -121,26 +154,6 @@ int main(int argc, char **argv) {
         }
         atomic_store(&s->frame_count, (uint32_t) guest_frame_count());
 
-        // Keep the audio ring a little ahead of the output.
-        uint32_t audio_rate = atomic_load(&s->audio_rate);
-        if (audio_rate && !paused) {
-            uint32_t target = audio_rate / 50, burst = atomic_load(&s->audio_burst) * 2;
-            if (target < burst) target = burst;
-            if (target > IPC_AUDIO_RING / 2) target = IPC_AUDIO_RING / 2;
-            for (;;) {
-                uint32_t w = atomic_load(&s->audio_write), filled = w - atomic_load(&s->audio_read);
-                if (filled >= target) break;
-                uint32_t n = target - filled;
-                if (n > 1024) n = 1024;
-                guest_snd_render(chunk, (int) n, (int) audio_rate);
-                for (uint32_t i = 0; i < n; i++) {
-                    uint32_t at = (w + i) & (IPC_AUDIO_RING - 1);
-                    s->audio[at * 2] = chunk[i * 2];
-                    s->audio[at * 2 + 1] = chunk[i * 2 + 1];
-                }
-                atomic_store(&s->audio_write, w + n);
-            }
-        }
         sleep_us(1000);
     }
 }

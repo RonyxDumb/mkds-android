@@ -236,91 +236,103 @@ typedef struct Batch {
 static Batch *s_batches;
 static size_t s_batch_cap;
 
-// Frame interpolation: each polygon of the list is looked for in the previous list by a signature that stays the
-// same while a model moves (shape, texture, attributes and the texture coordinates of its vertices), the nearest one
-// to where the lists line up so far. Polygons not found, or found too far away (a cut), are drawn as they are.
-static uint32_t poly_signature(const Gx3dFrame *f, const GxPolygon *p) {
-    uint32_t h = p->count * 0x9e3779b1u ^ p->teximage * 0x85ebca77u ^ p->pltt * 0xc2b2ae3du ^
-                 (p->attr & ~0x001f0000u) * 0x27d4eb2fu ^ p->tag * 0x165667b1u;
-    for (int k = 0; k < p->count; k++) {
-        const GxVertex *v = &f->vertices[p->first + k];
-        h = (h ^ ((uint32_t) (uint16_t) v->s | (uint32_t) (uint16_t) v->t << 16)) * 0x01000193u;
-    }
-    return h ? h : 1;
-}
+// Frame interpolation pairs the models of two lists. A model piece is a vertex block (BEGIN_VTXS): its polygons,
+// culled ones included (GxPolygon.hidden), are the same every frame, so a block is found in the previous list by a
+// signature of all its polygons (shapes, textures, attributes, texture coordinates); among identical blocks (wheels,
+// item boxes, trees) the one nearest to where this one is now, each used once. A block not found, or found too far
+// away (a cut), is drawn as it is, whole: the parts of a model never separate.
+typedef struct Block {
+    uint32_t first, count, sig;
+    float cx, cy, cw; // centre in clip space (sums over the vertices / their number)
+} Block;
 
-#define MATCH_BITS 13
-static uint32_t s_match_key[1 << MATCH_BITS];
-static int32_t s_match_first[1 << MATCH_BITS];
-static int32_t *s_match_next;
-static uint32_t *s_prev_sig;
+static Block *s_blocks[2];
+static size_t s_block_cap[2];
 static int32_t *s_match; // per polygon of the current list: index in the previous list, or -1
 static size_t s_match_cap;
+static uint8_t *s_used;
+static size_t s_used_cap;
+
+static size_t find_blocks(const Gx3dFrame *f, int which) {
+    size_t n = 0;
+    for (uint32_t i = 0; i < f->polygon_count;) {
+        uint32_t j = i + 1;
+        while (j < f->polygon_count && f->polygons[j].tag != 0) j++;
+        if (n + 1 > s_block_cap[which]) {
+            s_block_cap[which] = (n + 1) * 2;
+            s_blocks[which] = realloc(s_blocks[which], s_block_cap[which] * sizeof(Block));
+        }
+        Block *b = &s_blocks[which][n++];
+        b->first = i;
+        b->count = j - i;
+        uint32_t h = 0x811c9dc5u ^ (j - i);
+        double sx = 0, sy = 0, sw = 0;
+        int nv = 0;
+        for (uint32_t k = i; k < j; k++) {
+            const GxPolygon *p = &f->polygons[k];
+            h = (h ^ p->count) * 0x01000193u;
+            h = (h ^ p->teximage) * 0x01000193u;
+            h = (h ^ p->pltt) * 0x01000193u;
+            h = (h ^ (p->attr & ~0x001f0000u)) * 0x01000193u;
+            for (int v = 0; v < p->count; v++) {
+                const GxVertex *g = &f->vertices[p->first + v];
+                h = (h ^ ((uint32_t) (uint16_t) g->s | (uint32_t) (uint16_t) g->t << 16)) * 0x01000193u;
+                sx += g->x;
+                sy += g->y;
+                sw += g->w;
+                nv++;
+            }
+        }
+        b->sig = h;
+        b->cx = (float) (sx / nv);
+        b->cy = (float) (sy / nv);
+        b->cw = (float) (sw / nv);
+        i = j;
+    }
+    return n;
+}
 
 static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
-    size_t need = prev->polygon_count > f->polygon_count ? prev->polygon_count : f->polygon_count;
-    if (need + 1 > s_match_cap) {
-        s_match_cap = (need + 1) * 2;
-        s_match_next = realloc(s_match_next, s_match_cap * sizeof(*s_match_next));
-        s_prev_sig = realloc(s_prev_sig, s_match_cap * sizeof(*s_prev_sig));
+    size_t np = find_blocks(prev, 0), nc = find_blocks(f, 1);
+    if (f->polygon_count + 1 > s_match_cap) {
+        s_match_cap = (f->polygon_count + 1) * 2;
         s_match = realloc(s_match, s_match_cap * sizeof(*s_match));
     }
-    memset(s_match_key, 0, sizeof(s_match_key));
-    // Hash chains, each in increasing list order.
-    for (int32_t j = (int32_t) prev->polygon_count - 1; j >= 0; j--) {
-        uint32_t sig = poly_signature(prev, &prev->polygons[j]);
-        s_prev_sig[j] = sig;
-        uint32_t slot = sig & ((1u << MATCH_BITS) - 1);
-        while (s_match_key[slot] && s_match_key[slot] != sig) slot = (slot + 1) & ((1u << MATCH_BITS) - 1);
-        s_match_next[j] = s_match_key[slot] ? s_match_first[slot] : -1;
-        s_match_key[slot] = sig;
-        s_match_first[slot] = j;
+    if (np + 1 > s_used_cap) {
+        s_used_cap = (np + 1) * 2;
+        s_used = realloc(s_used, s_used_cap);
     }
-    int32_t offset = 0;
-    for (uint32_t i = 0; i < f->polygon_count; i++) {
-        const GxPolygon *p = &f->polygons[i];
-        uint32_t sig = poly_signature(f, p);
-        int32_t want = (int32_t) i + offset, best = -1;
-        if (want >= 0 && want < (int32_t) prev->polygon_count && s_prev_sig[want] == sig) {
+    memset(s_used, 0, np);
+    for (uint32_t i = 0; i < f->polygon_count; i++) s_match[i] = -1;
+    const Block *pb = s_blocks[0], *cb = s_blocks[1];
+    long offset = 0; // where the lists line up so far
+    for (size_t c = 0; c < nc; c++) {
+        const Block *b = &cb[c];
+        long want = (long) c + offset, best = -1;
+        float best_d = 0;
+        // Candidates: the expected place first, then any identical block (nearest, not taken yet).
+        if (want >= 0 && want < (long) np && !s_used[want] && pb[want].sig == b->sig) {
             best = want;
-        } else {
-            uint32_t slot = sig & ((1u << MATCH_BITS) - 1);
-            while (s_match_key[slot] && s_match_key[slot] != sig) slot = (slot + 1) & ((1u << MATCH_BITS) - 1);
-            // Elsewhere only when the signature is unique: with identical objects (wheels, item boxes) any other
-            // choice can pair an object with its twin.
-            if (s_match_key[slot] && s_match_next[s_match_first[slot]] < 0) best = s_match_first[slot];
+            best_d = fabsf(pb[want].cx - b->cx) + fabsf(pb[want].cy - b->cy) + fabsf(pb[want].cw - b->cw);
         }
-        if (best >= 0) {
-            // Too far from where it was (a camera cut, a teleport): not interpolated. Measured in clip space against
-            // the depth, which stays meaningful for vertices behind the camera (large ground polygons): skipping
-            // those alone would open gaps along the edges they share with interpolated neighbours.
-            const GxVertex *a = &prev->vertices[prev->polygons[best].first], *b = &f->vertices[p->first];
-            float d = fabsf((float) (a->x - b->x)) + fabsf((float) (a->y - b->y)) + fabsf((float) (a->w - b->w));
-            float scale = fmaxf(fabsf((float) a->w), fabsf((float) b->w)) + 4096.0f;
-            if (d > scale) {
-                s_match[i] = -1;
-                continue;
+        for (size_t k = 0; k < np; k++) {
+            if (s_used[k] || pb[k].sig != b->sig || (long) k == want) continue;
+            float d = fabsf(pb[k].cx - b->cx) + fabsf(pb[k].cy - b->cy) + fabsf(pb[k].cw - b->cw);
+            if (best < 0 || d < best_d) {
+                best = (long) k;
+                best_d = d;
             }
-            offset = best - (int32_t) i;
         }
-        s_match[i] = best;
-    }
-    // A vertex block (one piece of a model) is interpolated whole or not at all, so that its parts never separate.
-    uint32_t start = 0;
-    for (uint32_t i = 0; i <= f->polygon_count; i++) {
-        if (i == f->polygon_count || (i > start && f->polygons[i].tag == 0)) {
-            bool all = true;
-            for (uint32_t k = start; k < i && all; k++) all = s_match[k] >= 0;
-            if (!all) {
-                for (uint32_t k = start; k < i; k++) s_match[k] = -1;
-            }
-            start = i;
-        }
+        if (best < 0) continue;
+        // A cut or a jump: further than the depth of the piece (clip space works behind the camera too).
+        float scale = fmaxf(fabsf(pb[best].cw), fabsf(b->cw)) + 4096.0f;
+        if (best_d > scale) continue;
+        s_used[best] = 1;
+        offset = best - (long) c;
+        for (uint32_t k = 0; k < b->count; k++) s_match[b->first + k] = (int32_t) (pb[best].first + k);
     }
 }
 
-// `prev`/`pp`: the polygon in the previous list, to draw it at fraction `t` of the way from there (frame
-// interpolation at display rates above the game's 60 Hz); NULL to draw it as it is.
 static float s_target_aspect = 4.0f / 3.0f; // of the render target
 
 static void push_polygon(const Gx3dFrame *f, const GxPolygon *p, Vertex **out, GLuint tex, const Gx3dFrame *prev,
@@ -390,6 +402,7 @@ uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const F
     for (int pass = 0; pass < 2; pass++) {
         for (uint32_t i = 0; i < f->polygon_count; i++) {
             const GxPolygon *p = &f->polygons[i];
+            if (p->hidden) continue;
             uint32_t alpha = (p->attr >> 16) & 31;
             uint32_t fmt = (p->teximage >> 26) & 7;
             bool shadow = ((p->attr >> 4) & 3) == 3;

@@ -205,8 +205,9 @@ static int32_t det3(int64_t a0, int64_t a1, int64_t a2, int64_t b0, int64_t b1, 
 static void emit_polygon(const GxVertex *v, int count) {
     Gx3dFrame *f = building();
     uint32_t index_in_block = G.prim_index++;
-    // Entirely outside one clip plane: dropped, as the DS does.
-    for (int plane = 0; plane < 6; plane++) {
+    bool hidden = false;
+    // Entirely outside one clip plane: dropped, as the DS does (kept hidden).
+    for (int plane = 0; plane < 6 && !hidden; plane++) {
         int outside = 0;
         for (int i = 0; i < count; i++) {
             int32_t c = plane < 2 ? v[i].x : plane < 4 ? v[i].y : v[i].z;
@@ -215,7 +216,7 @@ static void emit_polygon(const GxVertex *v, int count) {
             }
         }
         if (outside == count) {
-            return;
+            hidden = true;
         }
     }
     // Facing: winding in homogeneous coordinates (y up), counter-clockwise on screen is front.
@@ -226,7 +227,7 @@ static void emit_polygon(const GxVertex *v, int count) {
     bool front = sign >= 0;
     uint32_t attr = G.polyattr;
     if ((front && !(attr & 0x80)) || (!front && !(attr & 0x40))) {
-        return; // culled (bit 7 renders front faces, bit 6 back faces)
+        hidden = true; // culled (bit 7 renders front faces, bit 6 back faces)
     }
     if (f->polygon_count >= GX_MAX_POLYGONS || f->vertex_count + count > GX_MAX_VERTICES) {
         return;
@@ -236,6 +237,7 @@ static void emit_polygon(const GxVertex *v, int count) {
     p->count = (uint8_t) count;
     memcpy(p->viewport, G.viewport, 4);
     p->front = front;
+    p->hidden = hidden;
     p->attr = attr;
     p->teximage = G.teximage;
     p->pltt = G.pltt;
