@@ -35,6 +35,13 @@ const uint8_t *vram_ptr(const VramMap *map, const uint8_t *vram, int region, uin
 // in RGB888), NULL for none. The output order is top screen, bottom screen (POWCNT1 bit 15 chooses which engine).
 void gpu2d_render(const FrameSnapshot *f, const uint32_t *layer3d, uint32_t *top, uint32_t *bottom);
 
+// For a 3D layer rendered on the GPU: engine A's output split into what lies above the 3D layer and below it (see
+// render_engine_line), engine B's output complete. Master brightness is not applied to engine A in split mode.
+#define GPU2D_SPLIT ((const uint32_t *) (uintptr_t) 1)
+void gpu2d_render_split(const FrameSnapshot *f, uint32_t *engine_a_above, uint32_t *engine_a_below,
+                        uint32_t *engine_b);
+bool gpu2d_engine_a_on_top(const FrameSnapshot *f);
+
 // Software 3D rasteriser at the DS resolution (host tests and fallback).
 void soft3d_render(const Gx3dFrame *frame, const FrameSnapshot *f, uint32_t *out);
 

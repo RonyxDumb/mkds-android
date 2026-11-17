@@ -60,10 +60,14 @@ endforeach()
 file(GLOB PLATFORM_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/*.cpp)
+option(HOST_GL "Host test build: render with OpenGL ES (EGL, Mesa)" OFF)
+file(GLOB GL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/platform/gl/*.c)
 if (ANDROID)
     file(GLOB ANDROID_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/platform/android/*.c
          ${CMAKE_CURRENT_SOURCE_DIR}/platform/android/*.cpp)
-    list(APPEND PLATFORM_SOURCES ${ANDROID_SOURCES})
+    list(APPEND PLATFORM_SOURCES ${ANDROID_SOURCES} ${GL_SOURCES})
+elseif (HOST_GL)
+    list(APPEND PLATFORM_SOURCES ${GL_SOURCES})
 endif()
 
 if (ANDROID)
@@ -73,11 +77,17 @@ else()
     file(GLOB HOST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/host/*.c)
     add_executable(mkds ${PLATFORM_SOURCES} ${HOST_SOURCES})
     target_link_libraries(mkds PRIVATE pthread m)
+    target_link_options(mkds PRIVATE -Wl,-z,now)
+    if (HOST_GL)
+        target_compile_definitions(mkds PRIVATE HOST_GL)
+        target_link_libraries(mkds PRIVATE EGL GLESv2)
+    endif()
 endif()
 target_include_directories(mkds PRIVATE
     ${GEN}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/include
     ${CMAKE_CURRENT_SOURCE_DIR}/platform
+    ${CMAKE_CURRENT_SOURCE_DIR}/platform/gl
     )
 target_compile_definitions(mkds PRIVATE version_EUR)
 target_compile_options(mkds PRIVATE -O2 -fno-strict-aliasing -fwrapv -Wall -Wno-unused-function

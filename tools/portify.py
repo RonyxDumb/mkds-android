@@ -51,6 +51,8 @@ STRIP_FUNCS = {
     "libs/NitroSDK/fs/src/overlay_rom_loader.c": ["FS_ClearOverlayImage", "FS_LoadOverlayImageAsync",
                                                   "FS_LoadOverlayImage", "FS_StartOverlay"],
     "src/Main/Net/slot_result_sync.c": ["IsInOverlayRange"],
+    # Find their variable arguments from the address of the last fixed one (CodeWarrior spills them next to it).
+    "libs/NitroSDK/os/src/formatted_text_to_buffer.c": ["OS_SPrintf", "OS_SNPrintf"],
     "libs/NitroSDK/os/src/thread_scheduler.c": ["OS_InitThread", "OS_CreateThread", "OSi_ExitThread_ArgSpecified",
                                                 "OSi_ExitThread_Destroy", "OSi_RescheduleThread"],
 }

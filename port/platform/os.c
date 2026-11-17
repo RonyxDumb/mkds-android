@@ -497,7 +497,7 @@ void OS_CreateThread(OSThread *thread, void (*func)(void *), void *arg, u8 *stac
 static void start_host(HostThread *host) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 1024 * 1024);
+    pthread_attr_setstacksize(&attr, 8 * 1024 * 1024);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     if (pthread_create(&host->pthread, &attr, host_thread_main, host) != 0) {
         port_fatal("os: pthread_create failed");

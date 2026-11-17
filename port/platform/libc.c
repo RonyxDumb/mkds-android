@@ -122,3 +122,25 @@ int port_wctomb(char *d, wc16 c) {
     *d = (char) (c < 0x80 ? c : '?');
     return 1;
 }
+
+// ------------------------------------------------------------------------------------------------ SDK printf
+// OS_SPrintf / OS_SNPrintf take the address of their variable arguments with va_start (the decomp computes it from
+// the last fixed argument, which only works with CodeWarrior's calling convention). The va_list of both ARM (a
+// struct holding the pointer) and x86 (the pointer) starts with that address.
+int OS_VSNPrintf(char *dst, size_t len, const char *fmt, char *args);
+
+int OS_SPrintf(char *dst, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int r = OS_VSNPrintf(dst, 0x7fffffff, fmt, *(char **) &ap);
+    va_end(ap);
+    return r;
+}
+
+int OS_SNPrintf(char *dst, size_t len, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int r = OS_VSNPrintf(dst, len, fmt, *(char **) &ap);
+    va_end(ap);
+    return r;
+}

@@ -409,7 +409,11 @@ static void windows(const Engine *e, int y, const Line *line, uint8_t *mask) {
     }
 }
 
-static void render_engine_line(const Engine *e, int y, const uint32_t *layer3d, uint32_t *out) {
+// Split mode (layer3d == GPU2D_SPLIT): the 3D layer is drawn later at high resolution. `out` then receives what lies
+// above the 3D layer (alpha = its opacity over what is below), `below` what lies under it (alpha 0: the 3D pixel
+// replaces it; 255: it is a blend target, translucent 3D mixes with it; 1..254: also the weight of an opaque 3D pixel
+// in an alpha blend).
+static void render_engine_line(const Engine *e, int y, const uint32_t *layer3d, uint32_t *out, uint32_t *below) {
     Line line;
     memset(line.bg, 0, sizeof(line.bg));
     memset(line.obj, 0, sizeof(line.obj));
@@ -449,6 +453,73 @@ static void render_engine_line(const Engine *e, int y, const uint32_t *layer3d, 
     }
     if (bg0_3d) {
         prio[0] = io16(e, 0x08) & 3;
+    }
+
+    if (layer3d == GPU2D_SPLIT && bg0_3d) {
+        for (int x = 0; x < 256; x++) {
+            // The three topmost layers, with the 3D layer always present.
+            int top[3] = {LAYER_BD, LAYER_BD, LAYER_BD};
+            uint32_t color[3] = {backdrop, backdrop, backdrop};
+            int found = 0;
+            for (uint32_t p = 0; p < 4 && found < 3; p++) {
+                if (line.obj_prio[x] == p && (mask[x] & 0x10) && (line.obj[x] & 0x8000)) {
+                    top[found] = LAYER_OBJ;
+                    color[found++] = rgb555_to_888(line.obj[x]);
+                }
+                for (int bg = 0; bg < 4 && found < 3; bg++) {
+                    if (prio[bg] != p || !(mask[x] & (1u << bg)) || !(e->dispcnt & (0x100u << bg))) continue;
+                    if (bg == 0) {
+                        top[found] = 0;
+                        color[found++] = 0;
+                    } else if (line.bg[bg][x] & 0x8000) {
+                        top[found] = bg;
+                        color[found++] = rgb555_to_888(line.bg[bg][x]);
+                    }
+                }
+            }
+            int i3 = top[0] == 0 ? 0 : top[1] == 0 ? 1 : top[2] == 0 ? 2 : 3;
+            bool effects = mask[x] & 0x20;
+            uint32_t up = 0, down = backdrop & 0xffffff;
+            if (i3 == 0) {
+                // 3D on top: what is under it, and how they combine.
+                down = color[1] & 0xffffff;
+                bool second = (bldcnt >> (8 + top[1])) & 1;
+                uint32_t w = 0;
+                if (second) {
+                    w = 255;
+                    if (effects && (bldcnt & 1) && effect == 1) w = eva * 255 / 16 ? eva * 255 / 16 : 1;
+                    if (w > 255) w = 255;
+                }
+                if (effects && (bldcnt & 1) && (effect == 2 || effect == 3)) {
+                    up = (effect == 2 ? 0xffffffu : 0) | (evy * 255 / 16) << 24; // brighten / darken over 3D
+                }
+                below[x] = down | w << 24;
+            } else {
+                uint32_t c = color[0];
+                bool first = (bldcnt >> top[0]) & 1;
+                bool second = (bldcnt >> (8 + top[1])) & 1;
+                bool semi = top[0] == LAYER_OBJ && line.obj_alpha[x] != 0xff;
+                uint32_t a = 255;
+                if ((semi || (effects && first && effect == 1)) && second) {
+                    uint32_t ea = semi && line.obj_alpha[x] != 0xfe ? line.obj_alpha[x] + 1u : eva;
+                    uint32_t eb = semi && line.obj_alpha[x] != 0xfe ? 16 - ea : evb;
+                    if (top[1] == 0) {
+                        a = ea * 255 / 16; // over the 3D layer: the shader blends
+                        below[x] = (color[2] & 0xffffff) | (((bldcnt >> (8 + top[2])) & 1) ? 255u << 24 : 0);
+                    } else {
+                        c = blend(color[0], color[1], ea, eb);
+                    }
+                } else if (effects && first && effect == 2) {
+                    c = brighten(c, evy);
+                } else if (effects && first && effect == 3) {
+                    c = darken(c, evy);
+                }
+                up = (c & 0xffffff) | a << 24;
+                if (a == 255) below[x] = 0;
+            }
+            out[x] = up;
+        }
+        return;
     }
 
     for (int x = 0; x < 256; x++) {
@@ -517,7 +588,7 @@ static void master_brightness(uint16_t reg, uint32_t *line) {
 }
 
 static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a, const uint32_t *layer3d,
-                          uint32_t *out) {
+                          uint32_t *out, uint32_t *below) {
     Engine e;
     e.f = f;
     e.map = map;
@@ -548,14 +619,22 @@ static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a,
         } else if (display == 3) {
             for (int x = 0; x < 256; x++) line[x] = 0xff000000u;
         } else {
-            render_engine_line(&e, y, layer3d, line);
+            render_engine_line(&e, y, layer3d, line, below ? below + y * 256 : NULL);
         }
         if (is_a) {
             memcpy(engine_a_out + y * 256, line, 256 * 4);
         }
-        master_brightness(io16(&e, 0x6c), line);
+        if (layer3d == GPU2D_SPLIT && is_a) {
+            // The compositing shader applies the master brightness to the whole screen.
+            if (!(e.dispcnt & 8) || display != 1 || forced_blank) {
+                for (int x = 0; x < 256; x++) below[y * 256 + x] = 0; // no 3D on this line
+                for (int x = 0; x < 256; x++) line[x] |= 0xff000000u;
+            }
+        } else {
+            master_brightness(io16(&e, 0x6c), line);
+        }
     }
-    if (is_a && (f->io[0x67] & 0x80)) {
+    if (is_a && (f->io[0x67] & 0x80) && layer3d != GPU2D_SPLIT) {
         gpu2d_capture(f, engine_a_out, layer3d);
     }
 }
@@ -565,8 +644,16 @@ void gpu2d_render(const FrameSnapshot *f, const uint32_t *layer3d, uint32_t *top
     vram_map_build(&map, f->vramcnt);
     uint16_t powcnt = (uint16_t) (f->io[0x304] | f->io[0x305] << 8);
     bool a_on_top = powcnt & 0x8000;
-    render_engine(f, &map, true, layer3d, a_on_top ? top : bottom);
-    render_engine(f, &map, false, NULL, a_on_top ? bottom : top);
+    render_engine(f, &map, true, layer3d, a_on_top ? top : bottom, NULL);
+    render_engine(f, &map, false, NULL, a_on_top ? bottom : top, NULL);
+}
+
+void gpu2d_render_split(const FrameSnapshot *f, uint32_t *engine_a_above, uint32_t *engine_a_below,
+                        uint32_t *engine_b) {
+    VramMap map;
+    vram_map_build(&map, f->vramcnt);
+    render_engine(f, &map, true, GPU2D_SPLIT, engine_a_above, engine_a_below);
+    render_engine(f, &map, false, NULL, engine_b, NULL);
 }
 
 // ------------------------------------------------------------------------------------------------ capture
@@ -616,3 +703,5 @@ void gpu2d_capture(const FrameSnapshot *f, const uint32_t *engineA, const uint32
     }
     *(volatile uint8_t *) (uintptr_t) 0x04000067 &= 0x7f; // capture finished
 }
+
+bool gpu2d_engine_a_on_top(const FrameSnapshot *f) { return (f->io[0x305] & 0x80) != 0; }

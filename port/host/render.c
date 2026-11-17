@@ -102,7 +102,58 @@ static void write_png(const char *path, const uint32_t *rgba, int w, int h) {
     free(z);
 }
 
+#ifdef HOST_GL
+#include <EGL/egl.h>
+#include <GLES3/gl3.h>
+#include "present.h"
+
+// OpenGL ES output: the same presentation code as on Android, into a pbuffer, read back as PNG.
+#define GL_SCALE 3
+static bool gl_frame(const FrameSnapshot *f, const char *path) {
+    static bool ready, failed;
+    static const int W = 256 * GL_SCALE, H = 384 * GL_SCALE;
+    if (failed) return false;
+    if (!ready) {
+        EGLDisplay dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+        if (!eglInitialize(dpy, NULL, NULL)) {
+            failed = true;
+            return false;
+        }
+        const EGLint cfg_attr[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+                                   EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_NONE};
+        EGLConfig cfg;
+        EGLint n = 0;
+        eglChooseConfig(dpy, cfg_attr, &cfg, 1, &n);
+        if (n < 1) {
+            port_log("host: no EGL config");
+            failed = true;
+            return false;
+        }
+        const EGLint pb_attr[] = {EGL_WIDTH, W, EGL_HEIGHT, H, EGL_NONE};
+        EGLSurface surf = eglCreatePbufferSurface(dpy, cfg, pb_attr);
+        eglBindAPI(EGL_OPENGL_ES_API);
+        const EGLint ctx_attr[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+        EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctx_attr);
+        eglMakeCurrent(dpy, surf, surf, ctx);
+        port_log("host: GL %s", (const char *) glGetString(GL_RENDERER));
+        present_init();
+        ready = true;
+    }
+    present_update(f, GL_SCALE, 1.0f);
+    const int layout[8] = {0, 0, W, H / 2, 0, H / 2, W, H / 2};
+    present_draw(layout, W, H);
+    static uint32_t pixels[256 * GL_SCALE * 384 * GL_SCALE], flipped[256 * GL_SCALE * 384 * GL_SCALE];
+    glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    for (int y = 0; y < H; y++) memcpy(flipped + y * W, pixels + (H - 1 - y) * W, W * 4);
+    write_png(path, flipped, W, H);
+    return true;
+}
+#endif
+
 void host_write_frame(const FrameSnapshot *f, const char *path) {
+#ifdef HOST_GL
+    if (gl_frame(f, path)) return;
+#endif
     static uint32_t screens[2][256 * 192];
     static uint32_t layer3d[256 * 192];
     soft3d_render(&f->frame3d, f, layer3d);
