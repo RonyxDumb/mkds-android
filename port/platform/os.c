@@ -364,7 +364,7 @@ static bool run_deferred(void) {
 uint64_t g_frame_count;
 static uint64_t s_next_vblank_ns;
 
-static uint64_t vblank_period_ns(void) { return 1000000000000000ull / (g_vblank_rate_mhz ? g_vblank_rate_mhz : 59826); }
+static uint64_t vblank_period_ns(void) { return 1000000000000ull / (g_vblank_rate_mhz ? g_vblank_rate_mhz : 59826); } // ns per VBlank
 
 static void do_vblank(void) {
     port_frame_vblank();
