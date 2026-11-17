@@ -20,6 +20,8 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358" "cmake;3.22.1" "platforms;android-35" "build-tools;35.0.0"
+          # arm64: the game image (32-bit pointers) is built with GCC's ILP32 AArch64 target
+          sudo apt-get update -q && sudo apt-get install -y -q gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu ninja-build
       - name: Build
         run: |
           chmod +x gradlew

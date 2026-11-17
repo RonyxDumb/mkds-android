@@ -3,6 +3,7 @@
 #include "port.h"
 #include "frame.h"
 #include "present.h"
+#include "guest_if.h"
 
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
@@ -69,7 +70,7 @@ static void *render_thread(void *arg) {
             continue;
         }
         int w = ANativeWindow_getWidth(window), h = ANativeWindow_getHeight(window);
-        const FrameSnapshot *f = port_frame_acquire();
+        const FrameSnapshot *f = guest_frame_acquire();
         if (f) {
             // Internal 3D resolution: enough for the larger on-screen rectangle.
             int rect_h = layout[3] > layout[7] ? layout[3] : layout[7];

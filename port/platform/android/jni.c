@@ -1,30 +1,21 @@
 // Android entry points (com.mkds.port.Native).
 #include "port.h"
 #include "frame.h"
+#include "guest_if.h"
 
 #include <android/native_window_jni.h>
 #include <jni.h>
 #include <pthread.h>
 
-void GameMain(void);
-void port_overlays_init(void);
 void android_render_set_window(ANativeWindow *window);
 void android_render_set_layout(const int *rects);
-extern volatile bool g_paused;
-
-static void *game_thread(void *arg) {
-    (void) arg;
-    port_os_run(GameMain);
-    port_log("game thread ended");
-    return NULL;
-}
 
 // The DS address space must be reserved before anything else claims the low addresses: do it at load time.
 static bool s_memory_ok;
 
 JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void) vm, (void) reserved;
-    s_memory_ok = port_mem_init();
+    s_memory_ok = port_mem_init() && guest_load();
     return JNI_VERSION_1_6;
 }
 
@@ -55,15 +46,8 @@ JNIEXPORT jstring JNICALL Java_com_mkds_port_Native_start(JNIEnv *env, jclass cl
     if (!ok) {
         return (*env)->NewStringUTF(env, "The ROM could not be opened.");
     }
-    port_overlays_init();
-    gx3d_init();
-    g_vblank_rate_mhz = 59826;
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 4 * 1024 * 1024);
-    pthread_t thread;
-    pthread_create(&thread, &attr, game_thread, NULL);
-    pthread_attr_destroy(&attr);
+    guest_set_vblank_rate(59826);
+    guest_start_game();
     extern void android_audio_start(void);
     android_audio_start();
     return NULL;
@@ -84,16 +68,21 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setLayout(JNIEnv *env, jclass c
 JNIEXPORT void JNICALL Java_com_mkds_port_Native_setInput(JNIEnv *env, jclass cls, jint buttons, jboolean touching,
                                                           jint x, jint y) {
     (void) env, (void) cls;
-    PortInput in = {(uint16_t) buttons, touching, (uint16_t) x, (uint16_t) y, false};
-    port_input_set(&in);
+    static PortInput *in; // in memory the guest can address
+    if (!in) {
+        extern void *host_low_alloc(size_t size);
+        in = host_low_alloc(sizeof(*in));
+    }
+    *in = (PortInput) {(uint16_t) buttons, touching, (uint16_t) x, (uint16_t) y, false};
+    guest_input_set(in);
 }
 
 JNIEXPORT void JNICALL Java_com_mkds_port_Native_setPaused(JNIEnv *env, jclass cls, jboolean paused) {
     (void) env, (void) cls;
-    g_paused = paused;
+    guest_set_paused(paused);
     extern void android_audio_pause(bool paused);
     android_audio_pause(paused);
     if (paused) {
-        port_save_flush();
+        guest_save_flush();
     }
 }

@@ -33,3 +33,32 @@ void host_start_guest_thread(void (*fn)(void *), void *arg) {
     }
     pthread_attr_destroy(&attr);
 }
+
+// ------------------------------------------------------------------------------------------------ guest interface
+#include "guest_if.h"
+
+void GameMain(void);
+void port_overlays_init(void);
+void port_snd_render(int16_t *out, int frames, int rate);
+
+bool guest_load(void) { return true; }
+
+static void game_thread(void *arg) {
+    (void) arg;
+    port_overlays_init();
+    gx3d_init();
+    port_os_run(GameMain);
+}
+
+void guest_start_game(void) { host_start_guest_thread(game_thread, NULL); }
+const FrameSnapshot *guest_frame_acquire(void) { return port_frame_acquire(); }
+void guest_snd_render(int16_t *out, int frames, int rate) { port_snd_render(out, frames, rate); }
+void guest_input_set(const PortInput *in) { port_input_set(in); }
+void guest_save_flush(void) { port_save_flush(); }
+void guest_set_paused(bool paused) { g_paused = paused; }
+void guest_set_vblank_rate(uint32_t mhz) { g_vblank_rate_mhz = mhz; }
+uint64_t guest_frame_count(void) { return g_frame_count; }
+void guest_set_lockstep(void *ready, void *done) {
+    g_lockstep_ready = ready;
+    g_lockstep_done = done;
+}

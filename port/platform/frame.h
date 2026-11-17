@@ -22,6 +22,7 @@ typedef struct FrameSnapshot {
 const FrameSnapshot *port_frame_acquire(void);
 // Optional hook run on the game thread after each capture (tests).
 extern void (*g_frame_hook)(const FrameSnapshot *snapshot);
+extern void *g_lockstep_ready, *g_lockstep_done;
 
 #ifdef __cplusplus
 }

@@ -4,14 +4,14 @@
 #include <aaudio/AAudio.h>
 #include <pthread.h>
 
-void port_snd_render(int16_t *out, int frames, int rate);
+#include "guest_if.h"
 
 static AAudioStream *s_stream;
 static int s_rate = 48000;
 
 static aaudio_data_callback_result_t callback(AAudioStream *stream, void *user, void *data, int32_t frames) {
     (void) stream, (void) user;
-    port_snd_render(data, frames, s_rate);
+    guest_snd_render(data, frames, s_rate);
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 

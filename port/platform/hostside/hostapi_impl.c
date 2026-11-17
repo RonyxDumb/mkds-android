@@ -94,7 +94,11 @@ void hapi_tls_set(void *value) {
 
 // Threads that run guest code: their stacks must be addressable by it.
 void host_start_guest_thread(void (*fn)(void *), void *arg); // bridge or direct
-void hapi_thread_start(void (*fn)(void *), void *arg) { host_start_guest_thread(fn, arg); }
+// fn and arg come from the guest: 32-bit values (only the low half of the registers is defined).
+void hapi_thread_start(void (*fn)(void *), void *arg) {
+    host_start_guest_thread((void (*)(void *)) (uintptr_t) (uint32_t) (uintptr_t) fn,
+                            (void *) (uintptr_t) (uint32_t) (uintptr_t) arg);
+}
 void hapi_thread_exit(void) {
     pthread_exit(NULL);
 }

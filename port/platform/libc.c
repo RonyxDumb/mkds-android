@@ -124,23 +124,62 @@ int port_wctomb(char *d, wc16 c) {
 }
 
 // ------------------------------------------------------------------------------------------------ SDK printf
-// OS_SPrintf / OS_SNPrintf take the address of their variable arguments with va_start (the decomp computes it from
-// the last fixed argument, which only works with CodeWarrior's calling convention). The va_list of both ARM (a
-// struct holding the pointer) and x86 (the pointer) starts with that address.
+// OS_VSNPrintf (decomp) walks its arguments as a packed array of 32-bit words (64 bits for %ll), the CodeWarrior
+// layout. A C va_list has that layout on no ABI we build for (AArch64 passes them in registers), so the variable
+// arguments are copied into such an array, following the format.
 int OS_VSNPrintf(char *dst, size_t len, const char *fmt, char *args);
 
+static void pack_args(uint32_t *out, unsigned max, const char *fmt, va_list ap) {
+    unsigned n = 0;
+#define PUT32(v) do { if (n < max) out[n++] = (uint32_t) (v); } while (0)
+    while (*fmt) {
+        if (*fmt++ != '%') continue;
+        if (*fmt == '%') { fmt++; continue; }
+        while (*fmt == '+' || *fmt == ' ' || *fmt == '-' || *fmt == '0' || *fmt == '#') fmt++;
+        if (*fmt == '*') { PUT32(va_arg(ap, int)); fmt++; }
+        while (*fmt >= '0' && *fmt <= '9') fmt++;
+        if (*fmt == '.') {
+            fmt++;
+            if (*fmt == '*') { PUT32(va_arg(ap, int)); fmt++; }
+            while (*fmt >= '0' && *fmt <= '9') fmt++;
+        }
+        int ll = 0;
+        while (*fmt == 'h' || *fmt == 'l') { if (*fmt == 'l' && fmt[1] == 'l') { ll = 1; fmt++; } fmt++; }
+        char c = *fmt;
+        if (!c) break;
+        fmt++;
+        switch (c) {
+        case 'd': case 'i': case 'o': case 'u': case 'x': case 'X':
+            if (ll) {
+                uint64_t v = va_arg(ap, unsigned long long);
+                PUT32(v);
+                PUT32(v >> 32);
+            } else {
+                PUT32(va_arg(ap, unsigned));
+            }
+            break;
+        case 'c': PUT32(va_arg(ap, int)); break;
+        case 's': case 'p': case 'n': PUT32((uintptr_t) va_arg(ap, void *)); break;
+        default: break;
+        }
+    }
+#undef PUT32
+}
+
 int OS_SPrintf(char *dst, const char *fmt, ...) {
+    uint32_t words[64];
     va_list ap;
     va_start(ap, fmt);
-    int r = OS_VSNPrintf(dst, 0x7fffffff, fmt, *(char **) &ap);
+    pack_args(words, 64, fmt, ap);
     va_end(ap);
-    return r;
+    return OS_VSNPrintf(dst, 0x7fffffff, fmt, (char *) words);
 }
 
 int OS_SNPrintf(char *dst, size_t len, const char *fmt, ...) {
+    uint32_t words[64];
     va_list ap;
     va_start(ap, fmt);
-    int r = OS_VSNPrintf(dst, len, fmt, *(char **) &ap);
+    pack_args(words, 64, fmt, ap);
     va_end(ap);
-    return r;
+    return OS_VSNPrintf(dst, len, fmt, (char *) words);
 }

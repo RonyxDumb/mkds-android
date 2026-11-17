@@ -74,7 +74,9 @@ bool port_mem_init(void) {
         port_log("memory: cannot create the VRAM object");
         return false;
     }
-    g_vram_banks = mmap(NULL, VRAM_TOTAL_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, s_vram_fd, 0);
+    // A second view of the banks for the renderer and the capture, also below 4 GiB (the arm64 guest reads it).
+    g_vram_banks = mmap((void *) (uintptr_t) 0x0c000000, VRAM_TOTAL_SIZE, PROT_READ | PROT_WRITE,
+                        MAP_SHARED | MAP_FIXED_NOREPLACE, s_vram_fd, 0);
     if (g_vram_banks == MAP_FAILED) {
         port_log("memory: cannot map the VRAM object");
         return false;

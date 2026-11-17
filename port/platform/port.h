@@ -69,6 +69,7 @@ bool port_os_in_irq(void);
 // Frame pacing: 0 = as fast as possible (tests), otherwise target VBlank rate in mHz (59826 for the DS).
 extern uint32_t g_vblank_rate_mhz;
 extern volatile bool g_quit;
+extern volatile bool g_paused;
 
 // ---------------------------------------------------------------- frame / vblank (frame.c)
 // Called at each emulated VBlank (scanline 192), before the game's VBlank interrupt handler.

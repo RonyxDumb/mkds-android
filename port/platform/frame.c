@@ -10,6 +10,8 @@
 void port_tp_vblank(void);
 
 void (*g_frame_hook)(const FrameSnapshot *snapshot);
+// Tests: when set, each captured frame posts `ready` and waits for `done` (host semaphores).
+void *g_lockstep_ready, *g_lockstep_done;
 
 // Triple buffer: the writer fills `s_write`, publishes it as `s_ready`; the reader swaps `s_ready` with `s_read`.
 static FrameSnapshot s_buffers[3];
@@ -84,6 +86,10 @@ void port_frame_vblank(void) {
     }
     s_write = atomic_exchange(&s_ready, s_write);
     atomic_store(&s_fresh, true);
+    if (g_lockstep_ready) {
+        hapi_sem_post(g_lockstep_ready);
+        hapi_sem_wait(g_lockstep_done);
+    }
 
     gx3d_vblank();
     update_input_registers();

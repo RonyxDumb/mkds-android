@@ -9,8 +9,6 @@
 #include <string.h>
 #include <sys/stat.h>
 
-void GameMain(void); // the game's entry point (src/Main/System/main.c, renamed by tools/portify.py)
-void port_overlays_init(void);
 void host_write_frame(const FrameSnapshot *f, const char *path); // host/render.c
 
 typedef struct Press {
@@ -25,7 +23,10 @@ static int s_press_count;
 static uint64_t s_frames = 600, s_dump_every = 60;
 static const char *s_out = "frames";
 
-void port_snd_render(int16_t *out, int frames, int rate);
+#include "guest_if.h"
+#include "hostapi.h"
+
+void *host_low_alloc(size_t size);
 static FILE *s_wav;
 static uint32_t s_wav_frames;
 static double s_audio_accum;
@@ -51,30 +52,31 @@ static void wav_header(FILE *f, uint32_t frames) {
     fseek(f, 0, SEEK_END);
 }
 
-static void frame_hook(const FrameSnapshot *f) {
-    uint64_t n = g_frame_count;
-    // One frame of audio (48 kHz / 59.8261 Hz).
+// One captured frame: scripted input for the next one, audio, image.
+static bool on_frame(const FrameSnapshot *f, uint64_t n) {
+    static PortInput *in;
+    if (!in) in = host_low_alloc(sizeof(*in));
+    memset(in, 0, sizeof(*in));
+    for (int i = 0; i < s_press_count; i++) {
+        if (n >= s_presses[i].frame && n < s_presses[i].frame + s_presses[i].length) {
+            in->buttons |= s_presses[i].buttons;
+            if (s_presses[i].touch) {
+                in->touching = true;
+                in->touch_x = s_presses[i].x;
+                in->touch_y = s_presses[i].y;
+            }
+        }
+    }
+    guest_input_set(in);
     s_audio_accum += 48000.0 / 59.8261;
     int samples = (int) s_audio_accum;
     s_audio_accum -= samples;
     static int16_t audio[2048 * 2];
-    port_snd_render(audio, samples, 48000);
+    guest_snd_render(audio, samples, 48000);
     if (s_wav) {
         fwrite(audio, 4, (size_t) samples, s_wav);
         s_wav_frames += (uint32_t) samples;
     }
-    PortInput in = {0};
-    for (int i = 0; i < s_press_count; i++) {
-        if (n >= s_presses[i].frame && n < s_presses[i].frame + s_presses[i].length) {
-            in.buttons |= s_presses[i].buttons;
-            if (s_presses[i].touch) {
-                in.touching = true;
-                in.touch_x = s_presses[i].x;
-                in.touch_y = s_presses[i].y;
-            }
-        }
-    }
-    port_input_set(&in);
     if (s_dump_every && n % s_dump_every == 0) {
         char path[512];
         snprintf(path, sizeof(path), "%s/frame_%05llu.png", s_out, (unsigned long long) n);
@@ -83,15 +85,7 @@ static void frame_hook(const FrameSnapshot *f) {
                  *(uint32_t *) f->io, *(uint32_t *) (f->io + 0x1000), f->frame3d.polygon_count,
                  *(uint16_t *) (f->io + 0x304));
     }
-    if (n >= s_frames) {
-        port_log("done after %llu frames", (unsigned long long) n);
-        if (s_wav) {
-            wav_header(s_wav, s_wav_frames);
-            fclose(s_wav);
-        }
-        port_save_flush();
-        exit(0);
-    }
+    return n < s_frames;
 }
 
 static void parse_press(const char *spec) {
@@ -138,7 +132,7 @@ int main(int argc, char **argv) {
                 argv[0]);
         return 1;
     }
-    g_vblank_rate_mhz = 0;
+    uint32_t rate = 0;
     const char *save = "mkds.sav";
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--frames") && i + 1 < argc) s_frames = strtoull(argv[++i], NULL, 0);
@@ -146,24 +140,38 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) s_out = argv[++i];
         else if (!strcmp(argv[i], "--save") && i + 1 < argc) save = argv[++i];
         else if (!strcmp(argv[i], "--press") && i + 1 < argc) parse_press(argv[++i]);
-        else if (!strcmp(argv[i], "--realtime")) g_vblank_rate_mhz = 59826;
+        else if (!strcmp(argv[i], "--realtime")) rate = 59826;
         else if (!strcmp(argv[i], "--wav") && i + 1 < argc) {
             s_wav = fopen(argv[++i], "wb");
             wav_header(s_wav, 0);
         }
     }
     mkdir(s_out, 0755);
-    if (!port_mem_init()) {
-        port_fatal("cannot reserve the DS address space");
+    if (!port_mem_init() || !guest_load()) {
+        port_fatal("cannot reserve the DS address space / load the game");
     }
     if (!port_rom_open(argv[1])) {
         return 1;
     }
     port_save_set_path(save);
-    port_overlays_init();
-    gx3d_init();
-    g_frame_hook = frame_hook;
-    port_os_run(GameMain);
-    port_log("main returned");
+    guest_set_vblank_rate(rate);
+    void *ready = hapi_sem_new(), *done = hapi_sem_new();
+    guest_set_lockstep(ready, done);
+    guest_start_game();
+    for (;;) {
+        hapi_sem_wait(ready);
+        const FrameSnapshot *f = guest_frame_acquire();
+        bool more = !f || on_frame(f, f->number - 1);
+        if (!more) {
+            port_log("done after %llu frames", (unsigned long long) s_frames);
+            guest_save_flush();
+            if (s_wav) {
+                wav_header(s_wav, s_wav_frames);
+                fclose(s_wav);
+            }
+            exit(0);
+        }
+        hapi_sem_post(done);
+    }
     return 0;
 }

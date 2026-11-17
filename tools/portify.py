@@ -249,6 +249,8 @@ def main():
     write_if_changed(out / "sources.txt", "\n".join(sources) + "\n")
     write_if_changed(out / "stripped_asm.txt", "\n".join(stripped) + "\n")
     write_if_changed(out / "overlays.txt", "\n".join(sorted(used_overlays)) + "\n")
+    write_if_changed(out / "overlay_units.txt",
+                     "".join(f"{overlays[r]} {r}\n" for r in sorted(overlays) if (out / "src" / r).exists()))
 
 
 if __name__ == "__main__":
