@@ -17,7 +17,7 @@ typedef struct Vertex {
     float x, y, z, w;
     float r, g, b, a;
     float s, t;
-    float mode; // 0 modulate, 1 decal, 2 toon/highlight (as modulate), 3 shadow; +4 when textured
+    float mode; // 0 modulate, 1 decal, 2 toon/highlight, 3 shadow; +4 when textured
 } Vertex;
 
 static const char *VS = "#version 300 es\n"
@@ -38,6 +38,8 @@ static const char *FS = "#version 300 es\n"
                         "precision highp float;\n"
                         "uniform sampler2D tex;\n"
                         "uniform float alpha_ref;\n"
+                        "uniform bool highlight;\n"
+                        "uniform vec3 toon[32];\n"
                         "in vec4 v_color;\n"
                         "in vec2 v_uv;\n"
                         "flat in float v_mode;\n"
@@ -45,18 +47,26 @@ static const char *FS = "#version 300 es\n"
                         "void main() {\n"
                         "  vec4 c = v_color;\n"
                         "  float m = v_mode;\n"
-                        "  if (m >= 4.0) {\n"
+                        "  bool textured = m >= 4.0;\n"
+                        "  if (textured) m -= 4.0;\n"
+                        "  vec3 add = vec3(0.0);\n"
+                        "  if (m == 2.0) {\n" // toon / highlight: the vertex red picks a toon table colour
+                        "    vec3 tc = toon[int(clamp(floor(c.r * 31.0 + 0.5), 0.0, 31.0))];\n"
+                        "    if (highlight) { c.rgb = vec3(c.r); add = tc; } else c.rgb = tc;\n"
+                        "  }\n"
+                        "  if (textured) {\n"
                         "    vec4 t = texture(tex, v_uv);\n"
-                        "    m -= 4.0;\n"
                         "    if (m == 1.0) c = vec4(mix(c.rgb, t.rgb, t.a), c.a);\n"
                         "    else c *= t;\n"
                         "  }\n"
-                        "  if (c.a <= alpha_ref) discard;\n"
+                        "  c.rgb = min(c.rgb + add, vec3(1.0));\n"
+                        // The DS never draws pixels with alpha 0; the alpha test drops those not above the reference.
+                        "  if (c.a < 0.5 / 31.0 || c.a <= alpha_ref) discard;\n"
                         "  color = c;\n"
                         "}\n";
 
 static GLuint s_prog, s_vao, s_vbo, s_fbo, s_color, s_depth;
-static GLint s_u_tex_size, s_u_alpha_ref, s_u_wide;
+static GLint s_u_tex_size, s_u_alpha_ref, s_u_wide, s_u_highlight, s_u_toon;
 static int s_w, s_h;
 static Vertex *s_verts;
 static size_t s_vert_cap;
@@ -104,7 +114,7 @@ static void cache_validate(const VramMap *map, const uint8_t *vram) {
 
 static GLuint texture(const VramMap *map, const uint8_t *vram, uint32_t teximage, uint32_t pltt) {
     if (((teximage >> 26) & 7) == 0) return 0;
-    uint32_t key = teximage & 0x1ff0ffff; // address, size, format, colour 0 (not wrap/flip/transform)
+    uint32_t key = teximage & 0x3ff0ffff; // address, size, format, colour 0 transparent (not wrap/flip/transform)
     uint32_t fmt = (teximage >> 26) & 7;
     if (fmt == 0) return 0;
     if (fmt == 7) pltt = 0;
@@ -193,6 +203,8 @@ void gl3d_init(void) {
     s_u_tex_size = glGetUniformLocation(s_prog, "tex_size");
     s_u_alpha_ref = glGetUniformLocation(s_prog, "alpha_ref");
     s_u_wide = glGetUniformLocation(s_prog, "wide");
+    s_u_highlight = glGetUniformLocation(s_prog, "highlight");
+    s_u_toon = glGetUniformLocation(s_prog, "toon");
     glUseProgram(s_prog);
     glUniform1i(glGetUniformLocation(s_prog, "tex"), 0);
     glGenVertexArrays(1, &s_vao);
@@ -215,6 +227,7 @@ typedef struct Batch {
     uint32_t size_bits; // TEXIMAGE_PARAM, for the texture size
     uint32_t attr;
     uint8_t viewport[4];
+    uint8_t id; // polygon ID
     bool translucent, shadow, shadow_mask;
 } Batch;
 
@@ -274,10 +287,11 @@ uint32_t gl3d_render(const Gx3dFrame *f, const FrameSnapshot *snap, int scale, f
             GLuint tex = texturing ? texture(&map, snap->vram, p->teximage, p->pltt) : 0;
             Batch *b = nb ? &s_batches[nb - 1] : NULL;
             uint32_t state_attr = p->attr & 0x0000c800; // depth equal, depth write of translucent, ...
-            bool shadow_mask = shadow && ((p->attr >> 24) & 63) == 0;
+            uint8_t id = (uint8_t) ((p->attr >> 24) & 63);
+            bool shadow_mask = shadow && id == 0;
             if (!b || b->tex != tex || b->teximage != (p->teximage & 0x000f0000) || b->size_bits != p->teximage || b->attr != state_attr ||
                 memcmp(b->viewport, p->viewport, 4) != 0 || b->translucent != translucent || b->shadow != shadow ||
-                b->shadow_mask != shadow_mask) {
+                b->shadow_mask != shadow_mask || b->id != id) {
                 b = &s_batches[nb++];
                 b->first = (uint32_t) (out - s_verts);
                 b->count = 0;
@@ -289,6 +303,7 @@ uint32_t gl3d_render(const Gx3dFrame *f, const FrameSnapshot *snap, int scale, f
                 b->translucent = translucent;
                 b->shadow = shadow;
                 b->shadow_mask = shadow_mask;
+                b->id = id;
             }
             Vertex *start = out;
             push_polygon(f, p, &out, tex);
@@ -302,7 +317,7 @@ uint32_t gl3d_render(const Gx3dFrame *f, const FrameSnapshot *snap, int scale, f
     uint32_t cc = f->clear_color;
     glClearColor((cc & 31) / 31.0f, ((cc >> 5) & 31) / 31.0f, ((cc >> 10) & 31) / 31.0f, ((cc >> 16) & 31) / 31.0f);
     glClearDepthf(((f->clear_depth & 0x7fff) * 0x200 + 0x1ff) / (float) 0xffffff);
-    glClearStencil(0);
+    glClearStencil((GLint) ((cc >> 24) & 63)); // the stencil keeps the opaque polygon ID (bits 0-5), shadow mark bit 7
     glDepthMask(GL_TRUE);
     glStencilMask(0xff);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
@@ -311,6 +326,15 @@ uint32_t gl3d_render(const Gx3dFrame *f, const FrameSnapshot *snap, int scale, f
     glUniform1f(s_u_wide, wide);
     float alpha_ref = (f->disp3dcnt & 4) ? f->alpha_ref / 31.0f : 0.0f;
     glUniform1f(s_u_alpha_ref, alpha_ref > 0 ? alpha_ref : -1.0f);
+    glUniform1i(s_u_highlight, (f->disp3dcnt & 2) != 0);
+    float toon[32 * 3];
+    for (int i = 0; i < 32; i++) {
+        uint16_t c = f->toon_table[i];
+        toon[i * 3] = (c & 31) / 31.0f;
+        toon[i * 3 + 1] = ((c >> 5) & 31) / 31.0f;
+        toon[i * 3 + 2] = ((c >> 10) & 31) / 31.0f;
+    }
+    glUniform3fv(s_u_toon, 32, toon);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr) ((out - s_verts) * sizeof(Vertex)), s_verts, GL_STREAM_DRAW);
@@ -333,25 +357,40 @@ uint32_t gl3d_render(const Gx3dFrame *f, const FrameSnapshot *snap, int scale, f
             glUniform2f(s_u_tex_size, 1, 1);
         }
         if (b->shadow) {
-            // Shadow volumes: the mask (polygon id 0) marks the stencil where the depth test fails; the shadow
-            // polygons then draw only where the mark is, clearing it.
+            // Shadow volumes: the mask (polygon ID 0) marks the stencil (bit 7) where the depth test fails; a shadow
+            // polygon then draws where the mark is, except on pixels of opaque polygons with its own ID, and clears it.
             glEnable(GL_STENCIL_TEST);
             glDepthMask(GL_FALSE);
+            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+            glStencilMask(0x80);
             if (b->shadow_mask) {
-                glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-                glStencilFunc(GL_ALWAYS, 1, 0xff);
+                glStencilFunc(GL_ALWAYS, 0x80, 0xff);
                 glStencilOp(GL_KEEP, GL_REPLACE, GL_KEEP);
                 glDrawArrays(GL_TRIANGLES, (GLint) b->first, (GLsizei) b->count);
-                glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
             } else {
+                glStencilFunc(GL_EQUAL, 0x80 | b->id, 0xbf); // own ID: no shadow
+                glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
+                glDrawArrays(GL_TRIANGLES, (GLint) b->first, (GLsizei) b->count);
+                glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
                 glEnable(GL_BLEND);
                 glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-                glStencilFunc(GL_EQUAL, 1, 0xff);
+                glStencilFunc(GL_EQUAL, 0x80, 0x80);
                 glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
                 glDrawArrays(GL_TRIANGLES, (GLint) b->first, (GLsizei) b->count);
             }
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            glStencilMask(0xff);
             glDisable(GL_STENCIL_TEST);
             continue;
+        }
+        if (!b->translucent) {
+            // Opaque polygons record their ID for the shadows.
+            glEnable(GL_STENCIL_TEST);
+            glStencilMask(0x3f);
+            glStencilFunc(GL_ALWAYS, b->id, 0xff);
+            glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+        } else {
+            glDisable(GL_STENCIL_TEST);
         }
         if (b->translucent && blending) {
             glEnable(GL_BLEND);
@@ -363,6 +402,8 @@ uint32_t gl3d_render(const Gx3dFrame *f, const FrameSnapshot *snap, int scale, f
         }
         glDrawArrays(GL_TRIANGLES, (GLint) b->first, (GLsizei) b->count);
     }
+    glDisable(GL_STENCIL_TEST);
+    glStencilMask(0xff);
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);

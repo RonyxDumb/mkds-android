@@ -117,7 +117,7 @@ typedef struct Channel {
 } Channel;
 
 typedef struct Track {
-    bool active, note_wait, mute, tie, porta, cmp, mask_set;
+    bool active, note_wait, note_finish_wait, mute, tie, porta, cmp, mask_set;
     int player;
     uint16_t program;
     int volume, volume2;
@@ -252,7 +252,7 @@ static int adpcm_next(Channel *c) {
 // Reads the sample at the current position (advancing the ADPCM decoder as needed). Returns false at the end.
 static bool channel_sample(Channel *c, int *out) {
     if (c->type == CH_PSG) {
-        int phase = (int) (c->pos * 8) & 7;
+        int phase = (int) c->pos & 7; // one duty step per timer period, 8 per cycle
         *out = phase < c->duty + 1 ? 0x7fff : -0x7fff;
         return true;
     }
@@ -411,6 +411,7 @@ static void note_on(Track *t, int key, int velocity, int length) {
     Inst inst;
     if (!bank_instrument(pl->bank, t->program, key, &inst)) return;
     const uint8_t *p = inst.param;
+    if (inst.type == 5) return; // null instrument
     int type = inst.type == 2 ? CH_PSG : inst.type == 3 ? CH_NOISE : CH_PCM;
     int prio = t->prio + pl->prio;
     if (prio > 255) prio = 255;
@@ -436,7 +437,8 @@ static void note_on(Track *t, int key, int velocity, int length) {
     memset(c, 0, sizeof(*c));
     c->type = type;
     if (type == CH_PCM) {
-        const uint8_t *swav = bank_wave(pl->bank, rd16(p + 2), rd16(p));
+        // PCM: wave index and archive; direct PCM: the wave's address.
+        const uint8_t *swav = inst.type == 4 ? (const uint8_t *) (uintptr_t) rd32(p) : bank_wave(pl->bank, rd16(p + 2), rd16(p));
         if (!swav) return;
         channel_start_wave(c, swav);
     } else if (type == CH_PSG) {
@@ -530,13 +532,12 @@ static bool track_step(Track *t) {
         t->wait--;
         if (t->wait > 0) return true;
     }
-    if (t->note_wait) {
-        // Wait for the previous note to finish.
+    if (t->note_finish_wait) {
+        // A note of length 0 with note wait: the track waits until it has finished sounding.
         for (int i = 0; i < CHANNELS; i++) {
-            if (s_ch[i].active && s_ch[i].sequenced && s_ch[i].track == track_index(t) && s_ch[i].length > 0) {
-                return true;
-            }
+            if (s_ch[i].active && s_ch[i].sequenced && s_ch[i].track == track_index(t)) return true;
         }
+        t->note_finish_wait = false;
     }
     for (int guard = 0; guard < 10000 && t->wait == 0; guard++) {
         uint8_t cmd = *t->cur++;
@@ -561,7 +562,10 @@ static bool track_step(Track *t) {
             if (key > 127) key = 127;
             if (run && !t->mute) note_on(t, key, velocity, length > 0 ? length : -1);
             t->porta_key = key;
-            if (t->note_wait && run) t->wait = length;
+            if (t->note_wait && run) {
+                t->wait = length;
+                if (length == 0) t->note_finish_wait = true;
+            }
             continue;
         }
         switch (cmd & 0xf0) {
@@ -728,18 +732,17 @@ static void update_channel_params(Channel *c) {
     if (!c->sequenced) {
         static const int shifts[4] = {0, 1, 2, 4};
         float vol = c->direct_volume / 127.0f / (float) (1 << shifts[c->direct_shift & 3]);
-        float pan = c->direct_pan / 127.0f;
-        c->gain_l = vol * (1 - pan);
-        c->gain_r = vol * pan;
+        float pan = (float) c->direct_pan;
+        c->gain_l = vol * (128 - pan) / 128.0f;
+        c->gain_r = vol * pan / 128.0f;
         double rate = c->direct_timer ? 16756991.0 / c->direct_timer : 0;
-        if (c->type == CH_PSG) rate /= 8;
         c->step = rate / s_output_rate;
         return;
     }
     // Envelope.
     switch (c->env_state) {
     case ENV_ATTACK:
-        c->env_level = (c->attack * c->env_level) >> 8;
+        c->env_level = -((c->attack * -c->env_level) >> 8); // rounds toward 0, so it reaches 0
         if (c->env_level == 0 || c->attack == 0) {
             c->env_level = 0;
             c->env_state = ENV_DECAY;
@@ -779,8 +782,15 @@ static void update_channel_params(Channel *c) {
         pitch += c->sweep_pitch * (c->sweep_length - c->sweep_counter) / c->sweep_length;
         c->sweep_counter++;
     }
-    // LFO.
+    // LFO: the parameters follow the track, the counters are the channel's.
     Lfo *l = &c->lfo;
+    if (t) {
+        l->target = t->lfo.target;
+        l->speed = t->lfo.speed;
+        l->depth = t->lfo.depth;
+        l->range = t->lfo.range;
+        l->delay = t->lfo.delay;
+    }
     if (l->depth) {
         if (l->delay_counter < l->delay) {
             l->delay_counter++;
@@ -799,9 +809,10 @@ static void update_channel_params(Channel *c) {
     float gain = powf(10.0f, db / 200.0f) * (s_master_volume / 127.0f);
     if (pan < -64) pan = -64;
     if (pan > 63) pan = 63;
-    float p = (pan + 64) / 127.0f;
-    c->gain_l = gain * sqrtf(1 - p) * 1.0f;
-    c->gain_r = gain * sqrtf(p) * 1.0f;
+    // The mixer pans linearly: left (128 - pan) / 128, right pan / 128, pan 0..127.
+    float p = (float) (pan + 64);
+    c->gain_l = gain * (128 - p) / 128.0f;
+    c->gain_r = gain * p / 128.0f;
     double rate = rate_for(c->base_timer, pitch);
     c->step = rate / s_output_rate;
 }
@@ -866,8 +877,6 @@ void port_snd_render(int16_t *out, int frames, int rate) {
                 }
             }
         }
-        l *= 0.5f;
-        r *= 0.5f;
         out[n * 2] = (int16_t) (l > 32767 ? 32767 : l < -32768 ? -32768 : l);
         out[n * 2 + 1] = (int16_t) (r > 32767 ? 32767 : r < -32768 ? -32768 : r);
     }
