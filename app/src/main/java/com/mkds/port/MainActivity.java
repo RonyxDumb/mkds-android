@@ -40,6 +40,12 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().getAttributes().layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        Native.init(getFilesDir().getAbsolutePath());
+        File crash = new File(getFilesDir(), "crash.txt");
+        if (crash.isFile()) {
+            showCrashReport(crash);
+            return;
+        }
         if (isValidRom(romFile())) {
             startGame();
         } else {
@@ -51,6 +57,34 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                     .setCancelable(false)
                     .show();
         }
+    }
+
+    /** The report of the last crash, with the log before it: shown once, with a button to copy it. */
+    private void showCrashReport(File crash) {
+        StringBuilder text = new StringBuilder();
+        try {
+            text.append(new String(java.nio.file.Files.readAllBytes(crash.toPath()), "UTF-8"));
+            File log = new File(getFilesDir(), "log.txt");
+            if (log.isFile()) {
+                text.append("\nlog:\n").append(new String(java.nio.file.Files.readAllBytes(log.toPath()), "UTF-8"));
+            }
+        } catch (Exception e) {
+            text.append(e);
+        }
+        crash.delete();
+        final String report = text.toString();
+        new AlertDialog.Builder(this)
+                .setTitle("The game crashed last time")
+                .setMessage(report)
+                .setPositiveButton("Copy report", (d, w) -> {
+                    android.content.ClipboardManager cm =
+                            (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("mkds crash", report));
+                    recreate();
+                })
+                .setNegativeButton("Continue", (d, w) -> recreate())
+                .setCancelable(false)
+                .show();
     }
 
     private void pickRom() {

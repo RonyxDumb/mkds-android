@@ -44,6 +44,7 @@ target_compile_options(game PRIVATE
     -fwrapv                # and relies on wrapping arithmetic
     -fcommon               # tentative definitions shared between files, as CodeWarrior allows
     -fshort-wchar          # wchar_t is 16 bits on the DS
+    -Dconst=               # constant data is RAM on the DS and the game patches some of it: keep it writable
     -ffunction-sections
     -w)
 # Plain char: unsigned in game code, signed in the libraries (tools/project.py).

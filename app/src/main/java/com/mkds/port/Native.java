@@ -12,6 +12,9 @@ final class Native {
     static final int A = 0x001, B = 0x002, SELECT = 0x004, START = 0x008, RIGHT = 0x010, LEFT = 0x020, UP = 0x040,
             DOWN = 0x080, R = 0x100, L = 0x200, X = 0x400, Y = 0x800;
 
+    /** Installs the crash handler (crash.txt) and the log (log.txt) in dir. */
+    static native void init(String dir);
+
     /** Reserves the DS memory map, opens the ROM and starts the game thread. Returns an error message or null. */
     static native String start(String romPath, String savePath);
 

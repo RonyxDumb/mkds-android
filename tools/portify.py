@@ -24,6 +24,13 @@ FIXUPS = [
     ("src/Main/MapObjects/shadow_model_alpha.c", r"DrawShadowModelIfDrawFlag\(model\);", "DrawShadowModelIfDrawFlag(model, 0, 0);", 1),
     ("src/Main/MapObjects/shadow_model_alpha.c", r"DrawShadowModelIfDrawFlag\(\);", "DrawShadowModelIfDrawFlag(model, 0, 0);", 1),
     ("src/Main/MapObjects/send_obj_shadow.c", r"DrawShadowModelIfDrawFlag\(gJgShadow\);", "DrawShadowModelIfDrawFlag(gJgShadow, 0, 0);", 1),
+    # Arrays the game indexes past their declared size into the variables the DS links right after them: give them
+    # one storage block so that the overflow lands where it did.
+    ("src/Main/Sound/sound_sources.c",
+     r"NNSFndList gSoundSourceSecondUpdateList;\nNNSFndList gSoundSourceUpdateLists\[1\];",
+     "NNSFndList gSoundSourceUpdateListsStorage_[2] = {{0}};\n"
+     "__asm__(\".globl gSoundSourceUpdateLists\\n.set gSoundSourceUpdateLists, gSoundSourceUpdateListsStorage_\\n"
+     ".globl gSoundSourceSecondUpdateList\\n.set gSoundSourceSecondUpdateList, gSoundSourceUpdateListsStorage_ + 12\");", 1),
     # The game's entry point; `main` is the host program's.
     ("src/Main/System/main.c", r"^void main\(void\) \{", "void GameMain(void) {", 1),
     # VIEWPORT geometry command written by address.
@@ -195,7 +202,7 @@ def main():
             continue
         text = src.read_text(encoding="utf-8", errors="surrogateescape")
         for rx, rep, n in fixups_by_file.pop(rel, []):
-            text, count = re.subn(rx, rep, text, flags=re.M)
+            text, count = re.subn(rx, lambda m: rep, text, flags=re.M)
             if count != n:
                 sys.exit(f"portify: fixup {rx!r} matched {count} times in {rel}, expected {n}")
         text, names = strip_asm(text)
@@ -204,13 +211,6 @@ def main():
         stripped += [f"{rel}: {n}" for n in names]
         ov = overlays.get(rel)
         header = f'#line 1 "{rel}"\n'
-        if not ov:
-            # Constant data is ordinary RAM on the DS and the game patches some of it (pointers into archives): the
-            # platform layer makes these sections writable (port/platform/overlay.c).
-            header = '#pragma clang section rodata="game_rodata"\n' + header
-        if ov:
-            used_overlays.add(ov)
-            header = (f'#pragma clang section text="{ov}_text" rodata="{ov}_rodata" data="{ov}_data" bss="{ov}_bss"\n') + header
         dst = out / "src" / rel
         write_if_changed(dst, header + text)
         sources.append(dst.as_posix())

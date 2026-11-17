@@ -45,22 +45,7 @@ static Overlay s_overlays[4] = {
 static size_t range_size(Range r) { return r.start && r.stop > r.start ? (size_t) (r.stop - r.start) : 0; }
 static bool in_range(Range r, const void *p) { return r.start && (const u8 *) p >= r.start && (const u8 *) p < r.stop; }
 
-extern u8 __start_game_rodata[] __attribute__((weak)), __stop_game_rodata[] __attribute__((weak));
-
-static void make_writable(u8 *start, u8 *stop) {
-    if (!start || stop <= start) return;
-    uintptr_t page = (uintptr_t) sysconf(_SC_PAGESIZE);
-    uintptr_t a = (uintptr_t) start & ~(page - 1), b = ((uintptr_t) stop + page - 1) & ~(page - 1);
-    if (mprotect((void *) a, b - a, PROT_READ | PROT_WRITE) != 0) {
-        port_fatal("overlay: cannot make constant data writable");
-    }
-}
-
 void port_overlays_init(void) {
-    make_writable(__start_game_rodata, __stop_game_rodata);
-    for (int i = 0; i < 4; i++) {
-        make_writable(s_overlays[i].rodata.start, s_overlays[i].rodata.stop);
-    }
     for (int i = 0; i < 4; i++) {
         Overlay *ov = &s_overlays[i];
         size_t n = range_size(ov->data);

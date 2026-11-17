@@ -25,8 +25,44 @@ static int s_press_count;
 static uint64_t s_frames = 600, s_dump_every = 60;
 static const char *s_out = "frames";
 
+void port_snd_render(int16_t *out, int frames, int rate);
+static FILE *s_wav;
+static uint32_t s_wav_frames;
+static double s_audio_accum;
+
+static void wav_header(FILE *f, uint32_t frames) {
+    uint32_t data = frames * 4, rate = 48000, byte_rate = rate * 4;
+    fseek(f, 0, SEEK_SET);
+    fwrite("RIFF", 1, 4, f);
+    uint32_t riff = 36 + data;
+    fwrite(&riff, 4, 1, f);
+    fwrite("WAVEfmt ", 1, 8, f);
+    uint32_t fmt_len = 16;
+    uint16_t pcm = 1, ch = 2, align = 4, bits = 16;
+    fwrite(&fmt_len, 4, 1, f);
+    fwrite(&pcm, 2, 1, f);
+    fwrite(&ch, 2, 1, f);
+    fwrite(&rate, 4, 1, f);
+    fwrite(&byte_rate, 4, 1, f);
+    fwrite(&align, 2, 1, f);
+    fwrite(&bits, 2, 1, f);
+    fwrite("data", 1, 4, f);
+    fwrite(&data, 4, 1, f);
+    fseek(f, 0, SEEK_END);
+}
+
 static void frame_hook(const FrameSnapshot *f) {
     uint64_t n = g_frame_count;
+    // One frame of audio (48 kHz / 59.8261 Hz).
+    s_audio_accum += 48000.0 / 59.8261;
+    int samples = (int) s_audio_accum;
+    s_audio_accum -= samples;
+    static int16_t audio[2048 * 2];
+    port_snd_render(audio, samples, 48000);
+    if (s_wav) {
+        fwrite(audio, 4, (size_t) samples, s_wav);
+        s_wav_frames += (uint32_t) samples;
+    }
     PortInput in = {0};
     for (int i = 0; i < s_press_count; i++) {
         if (n >= s_presses[i].frame && n < s_presses[i].frame + s_presses[i].length) {
@@ -49,6 +85,10 @@ static void frame_hook(const FrameSnapshot *f) {
     }
     if (n >= s_frames) {
         port_log("done after %llu frames", (unsigned long long) n);
+        if (s_wav) {
+            wav_header(s_wav, s_wav_frames);
+            fclose(s_wav);
+        }
         port_save_flush();
         exit(0);
     }
@@ -107,6 +147,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--save") && i + 1 < argc) save = argv[++i];
         else if (!strcmp(argv[i], "--press") && i + 1 < argc) parse_press(argv[++i]);
         else if (!strcmp(argv[i], "--realtime")) g_vblank_rate_mhz = 59826;
+        else if (!strcmp(argv[i], "--wav") && i + 1 < argc) {
+            s_wav = fopen(argv[++i], "wb");
+            wav_header(s_wav, 0);
+        }
     }
     mkdir(s_out, 0755);
     if (!port_mem_init()) {

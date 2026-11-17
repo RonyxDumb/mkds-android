@@ -52,7 +52,11 @@ void port_log(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
 #ifdef __ANDROID__
-    __android_log_vprint(ANDROID_LOG_INFO, "mkds", fmt, ap);
+    char line[512];
+    vsnprintf(line, sizeof(line), fmt, ap);
+    __android_log_write(ANDROID_LOG_INFO, "mkds", line);
+    extern void android_log_line(const char *line);
+    android_log_line(line);
 #else
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);

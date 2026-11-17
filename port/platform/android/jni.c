@@ -28,6 +28,16 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     return JNI_VERSION_1_6;
 }
 
+void android_crash_init(const char *dir);
+
+JNIEXPORT void JNICALL Java_com_mkds_port_Native_init(JNIEnv *env, jclass cls, jstring dir) {
+    (void) cls;
+    const char *d = (*env)->GetStringUTFChars(env, dir, NULL);
+    android_crash_init(d);
+    (*env)->ReleaseStringUTFChars(env, dir, d);
+    port_log("memory map %s", s_memory_ok ? "reserved" : "NOT reserved");
+}
+
 JNIEXPORT jstring JNICALL Java_com_mkds_port_Native_start(JNIEnv *env, jclass cls, jstring rom, jstring save) {
     (void) cls;
     if (!s_memory_ok) {
@@ -54,6 +64,8 @@ JNIEXPORT jstring JNICALL Java_com_mkds_port_Native_start(JNIEnv *env, jclass cl
     pthread_t thread;
     pthread_create(&thread, &attr, game_thread, NULL);
     pthread_attr_destroy(&attr);
+    extern void android_audio_start(void);
+    android_audio_start();
     return NULL;
 }
 
@@ -79,6 +91,8 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setInput(JNIEnv *env, jclass cl
 JNIEXPORT void JNICALL Java_com_mkds_port_Native_setPaused(JNIEnv *env, jclass cls, jboolean paused) {
     (void) env, (void) cls;
     g_paused = paused;
+    extern void android_audio_pause(bool paused);
+    android_audio_pause(paused);
     if (paused) {
         port_save_flush();
     }
