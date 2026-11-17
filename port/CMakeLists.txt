@@ -79,7 +79,7 @@ target_include_directories(mkds PRIVATE
     )
 target_compile_definitions(mkds PRIVATE version_EUR)
 target_compile_options(mkds PRIVATE -O2 -fno-strict-aliasing -fwrapv -Wall -Wno-unused-function
-    $<$<COMPILE_LANGUAGE:C>:-std=gnu11 -include ${CMAKE_CURRENT_SOURCE_DIR}/compat/port_prefix.h>
+    $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
     $<$<COMPILE_LANGUAGE:CXX>:-std=c++17 -fno-exceptions -fno-rtti>)
 target_link_libraries(mkds PRIVATE -Wl,--whole-archive game -Wl,--no-whole-archive)
 if (ANDROID)

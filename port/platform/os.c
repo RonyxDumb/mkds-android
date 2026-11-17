@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 
 #include "types.h"
 #include "registers.h"
@@ -81,18 +82,20 @@ static uint64_t s_tick_origin_ns;
 volatile u64 gTickOverflowCount;
 u16 gTickInitialized;
 
+// The OS clock: real time, or with g_vblank_rate_mhz == 0 (tests) a virtual clock that only moves forward when every
+// thread waits, straight to the next event, so that frames, alarms and threads keep the DS's proportions.
+static uint64_t s_virtual_ns;
+static uint64_t os_time_ns(void) { return g_vblank_rate_mhz ? port_now_ns() - s_tick_origin_ns : s_virtual_ns; }
+
 static uint64_t ns_to_ticks(uint64_t ns) { return (uint64_t) ((double) ns * (TICK_HZ / 1e9)); }
-static uint64_t ticks_to_ns(uint64_t ticks) { return (uint64_t) ((double) ticks * (1e9 / TICK_HZ)); }
+static uint64_t ticks_to_ns(uint64_t ticks) { return (uint64_t) ceil((double) ticks * (1e9 / TICK_HZ)) + 1; }
 
 void OS_InitTick(void) {
-    if (!gTickInitialized) {
-        gTickInitialized = 1;
-        s_tick_origin_ns = port_now_ns();
-    }
+    gTickInitialized = 1;
 }
 u32 OS_IsTickAvailable(void) { return gTickInitialized; }
 u64 OS_GetTick(void) {
-    uint64_t t = ns_to_ticks(port_now_ns() - s_tick_origin_ns);
+    uint64_t t = ns_to_ticks(os_time_ns());
     gTickOverflowCount = t >> 16;
     return t;
 }
@@ -356,7 +359,7 @@ static bool run_deferred(void) {
 uint64_t g_frame_count;
 static uint64_t s_next_vblank_ns;
 
-static uint64_t vblank_period_ns(void) { return g_vblank_rate_mhz ? 1000000000000000ull / g_vblank_rate_mhz : 0; }
+static uint64_t vblank_period_ns(void) { return 1000000000000000ull / (g_vblank_rate_mhz ? g_vblank_rate_mhz : 59826); }
 
 static void do_vblank(void) {
     port_frame_vblank();
@@ -377,13 +380,12 @@ static bool run_events(bool idle) {
             ran = true;
         }
     }
-    uint64_t now_ns = port_now_ns();
-    if (g_vblank_rate_mhz ? now_ns >= s_next_vblank_ns : idle) {
-        if (g_vblank_rate_mhz) {
-            s_next_vblank_ns += vblank_period_ns();
-            if (now_ns > s_next_vblank_ns + vblank_period_ns() * 4) {
-                s_next_vblank_ns = now_ns + vblank_period_ns(); // fell far behind: resynchronise
-            }
+    (void) idle;
+    uint64_t now_ns = os_time_ns();
+    if (now_ns >= s_next_vblank_ns) {
+        s_next_vblank_ns += vblank_period_ns();
+        if (now_ns > s_next_vblank_ns + vblank_period_ns() * 4) {
+            s_next_vblank_ns = now_ns + vblank_period_ns(); // fell far behind: resynchronise
         }
         do_vblank();
         ran = true;
@@ -393,17 +395,20 @@ static bool run_events(bool idle) {
 
 // Sleeps until the next event when nothing is runnable.
 static void wait_for_event(void) {
-    if (!g_vblank_rate_mhz) {
-        return;
-    }
     uint64_t wake = s_next_vblank_ns;
     if (s_alarms) {
-        uint64_t alarm_ns = s_tick_origin_ns + ticks_to_ns(s_alarms->mFire);
+        uint64_t alarm_ns = ticks_to_ns(s_alarms->mFire);
         if (alarm_ns < wake) {
             wake = alarm_ns;
         }
     }
-    uint64_t now = port_now_ns();
+    if (!g_vblank_rate_mhz) {
+        if (wake > s_virtual_ns) {
+            s_virtual_ns = wake;
+        }
+        return;
+    }
+    uint64_t now = os_time_ns();
     if (wake > now) {
         struct timespec ts = {(time_t) ((wake - now) / 1000000000ull), (long) ((wake - now) % 1000000000ull)};
         nanosleep(&ts, NULL);
@@ -575,7 +580,10 @@ void OSi_ExitThread_Destroy(void) {
 }
 
 void port_os_run(void (*entry)(void)) {
-    s_next_vblank_ns = port_now_ns() + vblank_period_ns();
+    if (!s_tick_origin_ns) {
+        s_tick_origin_ns = port_now_ns();
+    }
+    s_next_vblank_ns = os_time_ns() + vblank_period_ns();
     entry();
 }
 

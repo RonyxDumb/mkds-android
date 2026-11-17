@@ -73,6 +73,14 @@ u32 MI_SwapWord(u32 setData, volatile u32 *destp) {
 }
 
 // ------------------------------------------------------------------------------------------------ DMA
+// The transfer is over when the call returns, so the completion interrupt's callback runs at once: the game waits for
+// it in busy loops (NNS_G3dGeWaitSendDL), which nothing else would interrupt here.
+static void dma_done(MIDmaCallback callback, void *arg) {
+    if (callback) {
+        callback(arg);
+    }
+}
+
 static void dma_copy(u32 dmaNo, const void *src, void *dest, u32 size, bool fill32, u32 fill_value, u32 unit) {
     (void) dmaNo;
     if (fill32) {
@@ -96,24 +104,18 @@ void MI_DmaFill32(u32 dmaNo, void *dest, u32 data, u32 size) { dma_copy(dmaNo, N
 
 void MI_DmaCopy32Async(u32 dmaNo, const void *src, void *dest, u32 size, MIDmaCallback callback, void *arg) {
     dma_copy(dmaNo, src, dest, size, false, 0, 4);
-    if (callback) {
-        port_os_defer(callback, arg);
-    }
+    dma_done(callback, arg);
 }
 
 void MI_DmaFill32Async(u32 dmaNo, void *dest, u32 data, u32 size, MIDmaCallback callback, void *arg) {
     dma_copy(dmaNo, NULL, dest, size, true, data, 4);
-    if (callback) {
-        port_os_defer(callback, arg);
-    }
+    dma_done(callback, arg);
 }
 
 void MI_SendGXCommandAsync(u32 dmaNo, const void *src, u32 commandLength, MIDmaCallback callback, void *arg) {
     (void) dmaNo;
     send_words(src, GXFIFO_ADDR, commandLength);
-    if (callback) {
-        port_os_defer(callback, arg);
-    }
+    dma_done(callback, arg);
 }
 
 void MI_SendGXCommandAsyncFast(u32 dmaNo, const void *src, u32 commandLength, MIDmaCallback callback, void *arg) {
