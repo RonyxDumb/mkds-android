@@ -487,8 +487,9 @@ static void execute(uint32_t cmd) {
         if ((G.teximage >> 30) == 1) {
             const fx32 *t = G.tex.m;
             int64_t s = G.s, tt = G.t;
-            G.ts = (int16_t) ((s * t[0] + tt * t[4] + 0x100ll * t[8] + 0x100ll * t[12]) >> 12);
-            G.tt = (int16_t) ((s * t[1] + tt * t[5] + 0x100ll * t[9] + 0x100ll * t[13]) >> 12);
+            // (S, T, 1/16, 1/16) times the matrix: with S and T in 1/16 texels, the translation rows count once.
+            G.ts = (int16_t) ((s * t[0] + tt * t[4] + t[8] + t[12]) >> 12);
+            G.tt = (int16_t) ((s * t[1] + tt * t[5] + t[9] + t[13]) >> 12);
         } else {
             G.ts = G.s;
             G.tt = G.t;

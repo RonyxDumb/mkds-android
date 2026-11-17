@@ -57,7 +57,13 @@ static void wav_header(FILE *f, uint32_t frames) {
 }
 
 // One captured frame: scripted input for the next one, audio, image.
+static bool s_bglog;
 static bool on_frame(const FrameSnapshot *f, uint64_t n) {
+    if (s_bglog) {
+        const uint16_t *io = (const uint16_t *) f->io;
+        port_log("bg %llu cnt %04x %04x %04x %04x ofs %d %d %d %d %d %d %d %d", (unsigned long long) n, io[4], io[5], io[6],
+                 io[7], io[8], io[9], io[10], io[11], io[12], io[13], io[14], io[15]);
+    }
     static PortInput *in;
     if (!in) in = host_low_alloc(sizeof(*in));
     memset(in, 0, sizeof(*in));
@@ -145,6 +151,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--save") && i + 1 < argc) save = argv[++i];
         else if (!strcmp(argv[i], "--press") && i + 1 < argc) parse_press(argv[++i]);
         else if (!strcmp(argv[i], "--realtime")) rate = 59826;
+        else if (!strcmp(argv[i], "--bglog")) s_bglog = true;
         else if (!strcmp(argv[i], "--keyon")) {
             extern bool g_snd_keyon_log;
             g_snd_keyon_log = true;
