@@ -31,10 +31,35 @@ FIXUPS = [
      "NNSFndList gSoundSourceUpdateListsStorage_[2] = {{0}};\n"
      "__asm__(\".globl gSoundSourceUpdateLists\\n.set gSoundSourceUpdateLists, gSoundSourceUpdateListsStorage_\\n"
      ".globl gSoundSourceSecondUpdateList\\n.set gSoundSourceSecondUpdateList, gSoundSourceUpdateListsStorage_ + 12\");", 1),
+    # The member screen's sub-screen labels: the game reads nine rows (the decomp declares the first five); the other
+    # four are the ones the DS has right after them.
+    ("src/Main/Menu/multi_select_member_label_rows.c",
+     r"const MultiSelectMemberSubLabelRows gMultiSelectMemberSubLabelRows = \{\n.*\n    5,\n    0x82\};",
+     "const LabelMessageRow gMultiSelectMemberSubLabelRowsStorage_[9] = {\n"
+     "    {0, 0x82, 0xd, 0, -1}, {1, 0x82, 0xd, 2, -1}, {2, 0x82, 0xd, 4, -1}, {3, 0x82, 0xd, 6, -1}, {4, 0x82, 0xd, 8, -1},\n"
+     "    {5, 0x82, 0xd, 10, -1}, {6, 0x82, 0xd, 12, -1}, {7, 0x82, 0xd, 14, -1}, {8, 0x78, 0xd, 17, 6}};\n"
+     "__asm__(\".globl gMultiSelectMemberSubLabelRows\\n.set gMultiSelectMemberSubLabelRows, gMultiSelectMemberSubLabelRowsStorage_\");", 1),
     # The game's entry point; `main` is the host program's.
     ("src/Main/System/main.c", r"^void main\(void\) \{", "void GameMain(void) {", 1),
     # VIEWPORT geometry command written by address.
     ("src/Main/Kart/kart_model_menu.c", r"\*\(u32 \*\) 0x4000580 = 0xbfff0000;", "PORT_IO_WRITE(reg_G3_VIEWPORT, 0xbfff0000);", 1),
+    # The wireless library reads its variable arguments from the stack after the last named one (CodeWarrior ABI):
+    # read them with va_arg instead (they are all 32-bit words).
+    ("libs/NitroSDK/wm/src/wireless_system_commands.c", r"args = \(u32 \*\) \(\(\(u32\) &paramNum & ~3\) \+ 4\);",
+     "args = 0; __builtin_va_list ap; __builtin_va_start(ap, paramNum);", 2),
+    ("libs/NitroSDK/wm/src/wireless_system_commands.c", r"= args\[-1\];", "= __builtin_va_arg(ap, u32);", 1),
+    ("libs/NitroSDK/wm/src/wireless_system_commands.c", r"if \(args\[-1\] == current\)",
+     "if (__builtin_va_arg(ap, u32) == current)", 1),
+    # The member screen of a new group asks a label for its priority and blending before the label has a canvas: on
+    # the DS the null pointer reads the memory at address 0 (instruction memory) and the answer is noise.
+    ("src/Main/Graphics/layout_entry_angle.c",
+     r"    return \(labelTableEntry->mLabelCanvas->mCellData->mPOamAttrArray->mAttr2 & LAYOUT_OAM_PRIORITY_MASK\) >> 10;",
+     "    if (labelTableEntry->mLabelCanvas == NULL) return 0;\n"
+     "    return (labelTableEntry->mLabelCanvas->mCellData->mPOamAttrArray->mAttr2 & LAYOUT_OAM_PRIORITY_MASK) >> 10;", 1),
+    ("src/Main/Graphics/layout_entry_angle.c",
+     r"    if \(\(labelTableEntry->mLabelCanvas->mCellData->mPOamAttrArray->mAttr0 & LAYOUT_OAM_MODE_MASK\) >> 10 == 1\) \{",
+     "    if (labelTableEntry->mLabelCanvas != NULL &&\n"
+     "        (labelTableEntry->mLabelCanvas->mCellData->mPOamAttrArray->mAttr0 & LAYOUT_OAM_MODE_MASK) >> 10 == 1) {", 1),
     # An empty label text given as an 8-bit "" to code that reads 16-bit text: on the DS the alignment padding after it
     # ends the text; here the next string followed (runaway text, stack overflow in the multiplayer menu).
     ("src/Main/Menu/multi_select_member_group.c", r'text = "";', 'text = (void *) L"";', 1),

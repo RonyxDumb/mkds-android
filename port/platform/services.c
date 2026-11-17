@@ -155,6 +155,7 @@ void *MIC_GetLastSamplingAddress(void) { return (void *) (uintptr_t) *(u32 *) 0x
 PXIFifoCallback FifoRecvCallbackTable[32];
 void PXI_SetFifoRecvCallback(s32 fifotag, PXIFifoCallback callback) { FifoRecvCallbackTable[fifotag & 31] = callback; }
 s32 PXI_IsCallbackReady(s32 fifotag, s32 proc) { (void) fifotag, (void) proc; return 1; }
+void PXI_Init(void) {}
 // Firmware flash (tag 4): the commands the DWC library sends to read and write its Wi-Fi settings. Packets are
 // words with an index in bits 16..23, the data in bits 0..15, a start flag (bit 25, with the SPI command in bits 8..15)
 // and an end flag (bit 24). The firmware is blank apart from the header word that locates the user settings.
@@ -227,6 +228,11 @@ s32 PXI_SendWordByFifo(s32 fifotag, u32 data, s32 err) {
     }
     if (fifotag == 7) { // sound
         port_snd_pxi_word(data);
+        return 0;
+    }
+    if (fifotag == 0xa) { // wireless
+        void port_wm7_command(u32 address); // wm7.c
+        port_wm7_command(data);
         return 0;
     }
     port_log("pxi: tag %d word %08x ignored", (int) fifotag, data);

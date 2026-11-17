@@ -152,8 +152,9 @@ void ClearContinuous(NNSG2dCharCanvas *pCanvas, u32 cl);
 void ClearArea1D(NNSG2dCharCanvas *pCanvas, u32 cl, s32 areaX, s32 areaY, s32 areaWidth, s32 areaHeight);
 
 void NNS_G2dCharCanvasInitForOBJ1D(void *pCC, void *charBase, s32 areaWidth, s32 areaHeight, s32 colorMode) {
-    u32 lw = areaWidth >= 8 ? 3 : 31 - (u32) __builtin_clz((u32) areaWidth);
-    u32 lh = areaHeight >= 8 ? 3 : 31 - (u32) __builtin_clz((u32) areaHeight);
+    // An empty canvas (a label with no text, width 0) gets the shape of the smallest OBJ.
+    u32 lw = areaWidth >= 8 ? 3 : areaWidth < 1 ? 0 : 31 - (u32) __builtin_clz((u32) areaWidth);
+    u32 lh = areaHeight >= 8 ? 3 : areaHeight < 1 ? 0 : 31 - (u32) __builtin_clz((u32) areaHeight);
     // The last argument packs the OBJ width and height shifts of the first OBJ into a word (bytes 0 and 1).
     u32 stride = (u32) objs[lh][lw][0] | ((u32) objs[lh][lw][1] << 8);
     InitCharCanvas(pCC, charBase, areaWidth, areaHeight, (u32) colorMode, DrawGlyph1D, ClearContinuous, ClearArea1D,

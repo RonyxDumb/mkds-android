@@ -171,3 +171,173 @@ bool hapi_save_write(const void *data, uint32_t size) {
     fclose(f);
     return rename(tmp, s_save_path) == 0;
 }
+
+// ------------------------------------------------------------------------------------------------ local network
+// Two UDP sockets: one on an ephemeral port for everything a station sends and receives directly, one on the fixed
+// beacon port that only listens for beacons (shared by every instance on the device: broadcasts reach them all).
+#include <errno.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+
+#define NET_BEACON_PORT 23535
+// Pointers from the guest: 32-bit values (only the low half of the registers is defined in the arm64 build).
+#define GUEST_PTR(p) ((void *) (uintptr_t) (uint32_t) (uintptr_t) (p))
+
+static int s_sock = -1, s_beacon_sock = -1;
+
+// The game has socket functions of its own with the same names (its Wi-Fi library's), which the 32-bit builds link
+// into the same image: take the C library's directly.
+#include <dlfcn.h>
+static struct {
+    int (*socket)(int, int, int);
+    int (*bind)(int, const struct sockaddr *, socklen_t);
+    int (*setsockopt)(int, int, int, const void *, socklen_t);
+    ssize_t (*sendto)(int, const void *, size_t, int, const struct sockaddr *, socklen_t);
+    ssize_t (*recvfrom)(int, void *, size_t, int, struct sockaddr *, socklen_t *);
+    int (*getifaddrs)(struct ifaddrs **);
+    void (*freeifaddrs)(struct ifaddrs *);
+} libc_net;
+
+static bool libc_net_load(void) {
+    if (libc_net.socket) return true;
+#ifdef __ANDROID__
+    void *libc = dlopen("libc.so", RTLD_NOW);
+#else
+    void *libc = dlopen("libc.so.6", RTLD_NOW);
+#endif
+    if (!libc) return false;
+    libc_net.socket = (int (*)(int, int, int)) dlsym(libc, "socket");
+    libc_net.bind = (int (*)(int, const struct sockaddr *, socklen_t)) dlsym(libc, "bind");
+    libc_net.setsockopt = (int (*)(int, int, int, const void *, socklen_t)) dlsym(libc, "setsockopt");
+    libc_net.sendto = (ssize_t (*)(int, const void *, size_t, int, const struct sockaddr *, socklen_t)) dlsym(libc, "sendto");
+    libc_net.recvfrom = (ssize_t (*)(int, void *, size_t, int, struct sockaddr *, socklen_t *)) dlsym(libc, "recvfrom");
+    libc_net.getifaddrs = (int (*)(struct ifaddrs **)) dlsym(libc, "getifaddrs");
+    libc_net.freeifaddrs = (void (*)(struct ifaddrs *)) dlsym(libc, "freeifaddrs");
+    return libc_net.socket && libc_net.bind && libc_net.setsockopt && libc_net.sendto && libc_net.recvfrom;
+}
+
+static int udp_socket(uint16_t port, bool reuse) {
+    int fd = libc_net.socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+    int one = 1;
+    libc_net.setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
+    if (reuse) {
+        libc_net.setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    }
+    struct sockaddr_in a = {0};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_ANY);
+    a.sin_port = htons(port);
+    if (libc_net.bind(fd, (struct sockaddr *) &a, sizeof(a)) != 0) {
+        port_log("net: cannot bind port %u (%s)", port, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+    return fd;
+}
+
+bool hapi_net_open(void) {
+    if (s_sock >= 0) return true;
+    if (!libc_net_load()) {
+        port_log("net: no socket functions");
+        return false;
+    }
+    s_sock = udp_socket(0, false);
+    s_beacon_sock = udp_socket(NET_BEACON_PORT, true);
+    if (s_sock < 0) {
+        port_log("net: no socket (%s)", strerror(errno));
+        return false;
+    }
+    port_log("net: open%s", s_beacon_sock < 0 ? " (beacons cannot be received)" : "");
+    return true;
+}
+
+void hapi_net_close(void) {
+    if (s_sock >= 0) close(s_sock);
+    if (s_beacon_sock >= 0) close(s_beacon_sock);
+    s_sock = s_beacon_sock = -1;
+}
+
+void hapi_net_mac(uint8_t *mac) {
+    mac = GUEST_PTR(mac);
+    static uint8_t s_mac[6];
+    static bool s_have;
+    if (!s_have) {
+        // Kept next to the save file, so that the address stays the same from one start to the next.
+        char path[600];
+        snprintf(path, sizeof(path), "%s.mac", s_save_path[0] ? s_save_path : "mkds");
+        FILE *f = fopen(path, "rb");
+        if (!f || fread(s_mac, 1, 6, f) != 6) {
+            uint64_t r = hapi_now_ns() ^ ((uint64_t) getpid() << 32);
+            int rnd = open("/dev/urandom", O_RDONLY);
+            if (rnd >= 0) {
+                if (read(rnd, &r, sizeof(r)) != (ssize_t) sizeof(r)) r ^= (uint64_t) time(NULL);
+                close(rnd);
+            }
+            s_mac[0] = 0x00, s_mac[1] = 0x09, s_mac[2] = 0xbf; // a DS address
+            s_mac[3] = (uint8_t) r, s_mac[4] = (uint8_t) (r >> 8), s_mac[5] = (uint8_t) (r >> 16);
+            if (f) fclose(f);
+            f = fopen(path, "wb");
+            if (f) fwrite(s_mac, 1, 6, f);
+        }
+        if (f) fclose(f);
+        s_have = true;
+    }
+    memcpy(mac, s_mac, 6);
+}
+
+static void send_to(uint32_t ip, uint16_t port, const void *data, uint32_t size) {
+    struct sockaddr_in a = {0};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = ip;
+    a.sin_port = htons(port);
+    libc_net.sendto(s_sock, data, size, 0, (struct sockaddr *) &a, sizeof(a));
+}
+
+void hapi_net_send(const HostNetAddr *to, const void *data, uint32_t size) {
+    to = GUEST_PTR(to);
+    data = GUEST_PTR(data);
+    if (s_sock < 0) return;
+    if (to) {
+        send_to(to->ip, (uint16_t) to->port, data, size);
+        return;
+    }
+    // Broadcast on every interface (a phone sharing its connection as a hotspot has no default route into it), and
+    // to this device (other instances, tests).
+    struct ifaddrs *list = NULL;
+    if (libc_net.getifaddrs && libc_net.getifaddrs(&list) == 0) {
+        for (struct ifaddrs *i = list; i; i = i->ifa_next) {
+            if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET || !(i->ifa_flags & IFF_UP)) continue;
+            if ((i->ifa_flags & IFF_BROADCAST) && i->ifa_broadaddr) {
+                send_to(((struct sockaddr_in *) i->ifa_broadaddr)->sin_addr.s_addr, NET_BEACON_PORT, data, size);
+            }
+        }
+        if (libc_net.freeifaddrs) libc_net.freeifaddrs(list);
+    }
+    send_to(htonl(INADDR_BROADCAST), NET_BEACON_PORT, data, size);
+    send_to(htonl(INADDR_LOOPBACK), NET_BEACON_PORT, data, size);
+}
+
+int32_t hapi_net_recv(void *data, uint32_t capacity, HostNetAddr *from) {
+    data = GUEST_PTR(data);
+    from = GUEST_PTR(from);
+    int socks[2] = {s_sock, s_beacon_sock};
+    for (int i = 0; i < 2; i++) {
+        if (socks[i] < 0) continue;
+        struct sockaddr_in a;
+        socklen_t len = sizeof(a);
+        ssize_t n = libc_net.recvfrom(socks[i], data, capacity, 0, (struct sockaddr *) &a, &len);
+        if (n >= 0) {
+            if (from) {
+                from->ip = a.sin_addr.s_addr;
+                from->port = ntohs(a.sin_port);
+            }
+            return (int32_t) n;
+        }
+    }
+    return -1;
+}

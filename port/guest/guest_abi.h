@@ -11,7 +11,7 @@
     X(hapi_log) X(hapi_abort) X(hapi_now_ns) X(hapi_sleep_ns) X(hapi_local_time) X(hapi_mutex_new) X(hapi_mutex_lock)  \
     X(hapi_mutex_unlock) X(hapi_sem_new) X(hapi_sem_free) X(hapi_sem_post) X(hapi_sem_wait) X(hapi_thread_start)       \
     X(hapi_thread_exit) X(hapi_tls_get) X(hapi_tls_set) X(hapi_vram_banks) X(hapi_vram_remap) X(hapi_rom)            \
-    X(hapi_save_read) X(hapi_save_write)
+    X(hapi_save_read) X(hapi_save_write) X(hapi_net_open) X(hapi_net_close) X(hapi_net_mac) X(hapi_net_send) X(hapi_net_recv)
 
 // At GUEST_BASE: what the host needs to start and drive the guest. Addresses are guest (32-bit) addresses.
 typedef struct GuestHeader {

@@ -359,8 +359,11 @@ static void do_vblank(void) {
 }
 
 // Runs every event that is due. Returns true when something ran.
+bool port_wm7_poll(void);   // wm7.c
+bool port_wm7_active(void);
 static bool run_events(bool idle) {
     bool ran = run_deferred();
+    ran |= port_wm7_poll();
     if (s_alarms) {
         u64 now = OS_GetTick();
         if (s_alarms->mFire <= now) {
@@ -397,6 +400,9 @@ static void wait_for_event(void) {
         return;
     }
     uint64_t now = os_time_ns();
+    if (port_wm7_active() && wake > now + 1000000) {
+        wake = now + 1000000; // the wireless delivers its messages at interrupt points: look again soon
+    }
     if (wake > now) {
         hapi_sleep_ns(wake - now);
     }
@@ -615,6 +621,8 @@ void OS_Init(void) {
     OSi_Initialized = 1;
     // The user settings the firmware leaves at 0x027ffc80: the language in bits 0-2 of the halfword at +0x64.
     *(volatile u16 *) (uintptr_t) 0x027ffce4 = (u16) ((*(volatile u16 *) (uintptr_t) 0x027ffce4 & ~7) | (g_port_language & 7));
+    // Wireless channels the firmware allows: 1 to 13.
+    if (!SYSTEM_WORK->mNvramUserInfo.mAllowedChannel) SYSTEM_WORK->mNvramUserInfo.mAllowedChannel = 0x1fff;
     OS_InitArena();
     OS_InitLock();
     OS_InitIrqTable();
@@ -682,8 +690,10 @@ void OS_GetOwnerInfo(OwnerInfo *info) {
     }
 }
 
+// Each device has its own address (kept next to the save file): stations tell each other apart by it.
 void OS_GetMacAddress(void *macAddress) {
-    static const u8 mac[6] = {0x00, 0x09, 0xbf, 0x12, 0x34, 0x56};
+    u8 mac[6];
+    hapi_net_mac(mac);
     memcpy(macAddress, mac, 6);
 }
 

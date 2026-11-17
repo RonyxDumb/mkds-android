@@ -224,15 +224,47 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
+    // Local wireless play: the game finds other phones by broadcast on the Wi-Fi network, and its races share every
+    // frame's input, so the Wi-Fi must let broadcasts in and not doze between packets.
+    private android.net.wifi.WifiManager.MulticastLock mMulticastLock;
+    private android.net.wifi.WifiManager.WifiLock mWifiLock;
+
+    private void holdWifi(boolean on) {
+        try {
+            android.net.wifi.WifiManager wifi =
+                    (android.net.wifi.WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+            if (wifi == null) return;
+            if (mMulticastLock == null) {
+                mMulticastLock = wifi.createMulticastLock("mkds-local");
+                mMulticastLock.setReferenceCounted(false);
+                int mode = android.os.Build.VERSION.SDK_INT >= 29 ? android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                                                                   : android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF;
+                mWifiLock = wifi.createWifiLock(mode, "mkds-local");
+                mWifiLock.setReferenceCounted(false);
+            }
+            if (on) {
+                mMulticastLock.acquire();
+                mWifiLock.acquire();
+            } else {
+                mMulticastLock.release();
+                mWifiLock.release();
+            }
+        } catch (RuntimeException e) {
+            // no Wi-Fi: local play just finds nobody
+        }
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
+        holdWifi(true);
         if (sStarted) Native.setPaused(false);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
+        holdWifi(false);
         if (sStarted) Native.setPaused(true);
     }
 

@@ -48,6 +48,18 @@ const uint8_t *hapi_rom(uint32_t *size);
 uint32_t hapi_save_read(void *data, uint32_t size);
 bool hapi_save_write(const void *data, uint32_t size);
 
+// Local network, for the DS wireless (wm7.c): UDP datagrams on the LAN. Addresses are IPv4 in network order.
+typedef struct HostNetAddr {
+    uint32_t ip, port;
+} HostNetAddr;
+bool hapi_net_open(void); // false when no socket can be opened
+void hapi_net_close(void);
+void hapi_net_mac(uint8_t *mac); // this device's wireless address (stable, random)
+// to == NULL: to every station of the local network (broadcast).
+void hapi_net_send(const HostNetAddr *to, const void *data, uint32_t size);
+// The next datagram, or -1 when none is waiting.
+int32_t hapi_net_recv(void *data, uint32_t capacity, HostNetAddr *from);
+
 #ifdef __cplusplus
 }
 #endif

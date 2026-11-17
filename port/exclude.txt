@@ -31,7 +31,6 @@ libs/NitroSDK/rtc/src/clock_chip_access.c
 libs/NitroSDK/spi/
 libs/NitroSDK/ctrdg/
 
-# Wireless hardware (DS Download Play, local wireless): not available.
+# DS Download Play: not available. The local wireless library (wm) runs; port/platform/wm7.c plays its ARM7 side.
 libs/NitroSDK/mb/
-libs/NitroSDK/wm/
 libs/NitroSDK/wvr/
