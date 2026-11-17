@@ -4,27 +4,41 @@
 #include "guest_if.h"
 
 #include <android/native_window_jni.h>
+#include <dlfcn.h>
 #include <jni.h>
 #include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+
+#ifdef PORT_IPC
+#include "ipc/ipc.h"
+#endif
 
 void android_render_set_window(ANativeWindow *window);
 void android_render_set_layout(const int *rects);
 
-// The DS address space must be reserved before anything else claims the low addresses: do it at load time.
+// 32-bit: the DS address space must be reserved before anything else claims the low addresses: do it at load time.
+// arm64: the game runs in its own process (ipc/ipc.h); this only creates the memory shared with it.
 static bool s_memory_ok;
+static char s_dir[512];
 
 JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void) vm, (void) reserved;
+#ifdef PORT_IPC
+    s_memory_ok = guest_load();
+#else
     s_memory_ok = port_mem_init() && guest_load();
+#endif
     return JNI_VERSION_1_6;
 }
 
-void android_crash_init(const char *dir);
+void android_crash_init(const char *dir, bool append);
 
 JNIEXPORT void JNICALL Java_com_mkds_port_Native_init(JNIEnv *env, jclass cls, jstring dir) {
     (void) cls;
     const char *d = (*env)->GetStringUTFChars(env, dir, NULL);
-    android_crash_init(d);
+    android_crash_init(d, false);
+    snprintf(s_dir, sizeof(s_dir), "%s", d);
     (*env)->ReleaseStringUTFChars(env, dir, d);
     port_log("memory map %s", s_memory_ok ? "reserved" : "NOT reserved");
 }
@@ -37,6 +51,23 @@ JNIEXPORT jstring JNICALL Java_com_mkds_port_Native_start(JNIEnv *env, jclass cl
     }
     const char *rom_path = (*env)->GetStringUTFChars(env, rom, NULL);
     const char *save_path = (*env)->GetStringUTFChars(env, save, NULL);
+#ifdef PORT_IPC
+    // The game program sits next to this library (native libraries are extracted).
+    char exe[600] = "libmkdsgame.so";
+    Dl_info self;
+    if (dladdr((void *) JNI_OnLoad, &self) && self.dli_fname && strrchr(self.dli_fname, '/')) {
+        snprintf(exe, sizeof(exe), "%.*s/libmkdsgame.so", (int) (strrchr(self.dli_fname, '/') - self.dli_fname),
+                 self.dli_fname);
+    }
+    const char *err = ipc_start(exe, rom_path, save_path, s_dir, 59826);
+    (*env)->ReleaseStringUTFChars(env, rom, rom_path);
+    (*env)->ReleaseStringUTFChars(env, save, save_path);
+    if (err) {
+        port_log("start: %s", err);
+        return (*env)->NewStringUTF(env, err);
+    }
+    bool ok = true;
+#else
     bool ok = port_rom_open(rom_path);
     if (ok) {
         port_save_set_path(save_path);
@@ -48,6 +79,7 @@ JNIEXPORT jstring JNICALL Java_com_mkds_port_Native_start(JNIEnv *env, jclass cl
     }
     guest_set_vblank_rate(59826);
     guest_start_game();
+#endif
     extern void android_audio_start(void);
     android_audio_start();
     return NULL;
@@ -68,7 +100,7 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setLayout(JNIEnv *env, jclass c
 JNIEXPORT void JNICALL Java_com_mkds_port_Native_setInput(JNIEnv *env, jclass cls, jint buttons, jboolean touching,
                                                           jint x, jint y) {
     (void) env, (void) cls;
-    static PortInput *in; // in memory the guest can address
+    static PortInput *in; // in memory the guest can address (arm64 in-process bridge)
     if (!in) {
         extern void *host_low_alloc(size_t size);
         in = host_low_alloc(sizeof(*in));

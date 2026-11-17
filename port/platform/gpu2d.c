@@ -6,6 +6,11 @@
 
 #include <string.h>
 
+static void capture_done_in_process(void) {
+    *(volatile uint8_t *) (uintptr_t) 0x04000067 &= 0x7f; // DISPCAPCNT: capture finished
+}
+void (*g_capture_done)(void) = capture_done_in_process;
+
 // ------------------------------------------------------------------------------------------------ VRAM mapping
 #define PAGE 0x4000u
 
@@ -701,7 +706,7 @@ void gpu2d_capture(const FrameSnapshot *f, const uint32_t *engineA, const uint32
             dst[woff + 1] = (uint8_t) (out >> 8);
         }
     }
-    *(volatile uint8_t *) (uintptr_t) 0x04000067 &= 0x7f; // capture finished
+    g_capture_done();
 }
 
 bool gpu2d_engine_a_on_top(const FrameSnapshot *f) { return (f->io[0x305] & 0x80) != 0; }

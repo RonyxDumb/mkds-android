@@ -50,11 +50,11 @@ static bool reserve(uint32_t addr, uint32_t size) {
     return true;
 }
 
-static int create_shared(size_t size) {
+int port_shared_create(const char *name, size_t size) {
 #ifdef __ANDROID__
-    return ASharedMemory_create("ds-vram", size);
+    return ASharedMemory_create(name, size);
 #else
-    int fd = (int) syscall(SYS_memfd_create, "ds-vram", 0);
+    int fd = (int) syscall(SYS_memfd_create, name, 0);
     if (fd >= 0 && ftruncate(fd, (off_t) size) != 0) {
         close(fd);
         return -1;
@@ -64,16 +64,21 @@ static int create_shared(size_t size) {
 }
 
 bool port_mem_init(void) {
+    int fd = port_shared_create("ds-vram", VRAM_TOTAL_SIZE);
+    if (fd < 0) {
+        port_log("memory: cannot create the VRAM object");
+        return false;
+    }
+    return port_mem_init_fd(fd);
+}
+
+bool port_mem_init_fd(int vram_fd) {
     if (!reserve(DS_ITCM_BASE, DS_ITCM_SIZE) || !reserve(DS_MAIN_BASE, DS_MAIN_SIZE) ||
         !reserve(DS_IO_BASE, DS_IO_SIZE) || !reserve(DS_IO2_BASE, 0x4000) || !reserve(DS_PLTT_BASE, 0x4000) ||
         !reserve(DS_VRAM_BASE, DS_VRAM_SIZE) || !reserve(DS_OAM_BASE, 0x4000) || !reserve(DS_GBA_BASE, 0x4000)) {
         return false;
     }
-    s_vram_fd = create_shared(VRAM_TOTAL_SIZE);
-    if (s_vram_fd < 0) {
-        port_log("memory: cannot create the VRAM object");
-        return false;
-    }
+    s_vram_fd = vram_fd;
     // A second view of the banks for the renderer and the capture, also below 4 GiB (the arm64 guest reads it).
     g_vram_banks = mmap((void *) (uintptr_t) 0x0c000000, VRAM_TOTAL_SIZE, PROT_READ | PROT_WRITE,
                         MAP_SHARED | MAP_FIXED_NOREPLACE, s_vram_fd, 0);

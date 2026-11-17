@@ -24,6 +24,10 @@ static uint64_t s_frames = 600, s_dump_every = 60;
 static const char *s_out = "frames";
 
 #include "guest_if.h"
+#ifdef PORT_IPC
+#include "ipc/ipc.h"
+#include <time.h>
+#endif
 #include "hostapi.h"
 
 void *host_low_alloc(size_t size);
@@ -147,6 +151,37 @@ int main(int argc, char **argv) {
         }
     }
     mkdir(s_out, 0755);
+#ifdef PORT_IPC
+    // Two processes, as on arm64 Android: mkds_server (next to this program) runs the game in real time.
+    (void) rate;
+    char exe[600];
+    snprintf(exe, sizeof(exe), "%s", argv[0]);
+    char *slash = strrchr(exe, '/');
+    snprintf(slash ? slash + 1 : exe, sizeof(exe) - (size_t) (slash ? slash + 1 - exe : 0), "mkds_server");
+    if (!guest_load()) port_fatal("cannot create the shared memory");
+    const char *err = ipc_start(exe, argv[1], save, ".", 59826);
+    if (err) port_fatal("%s", err);
+    uint64_t last = 0;
+    for (;;) {
+        const FrameSnapshot *f = guest_frame_acquire();
+        if (!f || f->number <= last) {
+            struct timespec ts = {0, 1000000};
+            nanosleep(&ts, NULL);
+            continue;
+        }
+        if (f->number > last + 1 && last) port_log("ipc: skipped %llu frames", (unsigned long long) (f->number - last - 1));
+        last = f->number;
+        if (!on_frame(f, f->number - 1)) {
+            port_log("done after %llu frames", (unsigned long long) s_frames);
+            guest_save_flush();
+            if (s_wav) {
+                wav_header(s_wav, s_wav_frames);
+                fclose(s_wav);
+            }
+            exit(0);
+        }
+    }
+#endif
     if (!port_mem_init() || !guest_load()) {
         port_fatal("cannot reserve the DS address space / load the game");
     }

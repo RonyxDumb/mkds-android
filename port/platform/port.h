@@ -34,6 +34,9 @@ void port_fatal(const char *fmt, ...) __attribute__((format(printf, 1, 2), noret
 #define PORT_ARENA_MAIN_HI 0x027c0000u
 
 bool port_mem_init(void);
+// The same with the VRAM banks in an existing shared-memory object (the game process of the arm64 Android build).
+bool port_mem_init_fd(int vram_fd);
+int port_shared_create(const char *name, size_t size); // shared-memory object (memfd), -1 on failure
 
 #define IO8(off) (*(volatile uint8_t *) (uintptr_t) (DS_IO_BASE + (off)))
 #define IO16(off) (*(volatile uint16_t *) (uintptr_t) (DS_IO_BASE + (off)))

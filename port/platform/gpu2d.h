@@ -48,6 +48,8 @@ void soft3d_render(const Gx3dFrame *frame, const FrameSnapshot *f, uint32_t *out
 // Display capture, as configured by DISPCAPCNT in the snapshot: writes into the live VRAM banks (g_vram_banks) so
 // that the next snapshots see it. engineA: engine A's output line buffer (before master brightness), layer3d: 3D.
 void gpu2d_capture(const FrameSnapshot *f, const uint32_t *engineA, const uint32_t *layer3d);
+// Tells the game the capture is done (clears the enable bit of DISPCAPCNT; through the game process with ipc/).
+extern void (*g_capture_done)(void);
 
 #ifdef __cplusplus
 }

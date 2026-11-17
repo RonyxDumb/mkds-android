@@ -31,6 +31,12 @@ android {
         }
     }
 
+    // Installed as files: the arm64 build runs libmkdsgame.so (the game process) from the native library directory.
+    packaging {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
     externalNativeBuild {
         cmake {
             path '../port/CMakeLists.txt'

@@ -86,11 +86,12 @@ static void handler(int sig, siginfo_t *info, void *uc_) {
     raise(sig);
 }
 
-void android_crash_init(const char *dir) {
+// append: the game process (arm64) shares the app's log.
+void android_crash_init(const char *dir, bool append) {
     snprintf(s_path, sizeof(s_path), "%s/crash.txt", dir);
     char log_path[512];
     snprintf(log_path, sizeof(log_path), "%s/log.txt", dir);
-    s_log_fd = open(log_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    s_log_fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND | (append ? 0 : O_TRUNC), 0644);
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = handler;
