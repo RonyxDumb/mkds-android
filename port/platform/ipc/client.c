@@ -196,6 +196,9 @@ void guest_save_flush(void) {
 void guest_set_paused(bool paused) {
     if (s) atomic_store(&s->paused, paused);
 }
+void guest_set_aspect(int32_t fx12) {
+    if (s) atomic_store(&s->aspect, fx12);
+}
 void guest_set_vblank_rate(uint32_t mhz) {
     if (s) atomic_store(&s->vblank_rate, mhz);
 }

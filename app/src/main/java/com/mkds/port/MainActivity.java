@@ -165,6 +165,25 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         root.addView(mControls);
         setContentView(root);
         hideSystemBars();
+        preferHighRefreshRate();
+    }
+
+    // The display's fastest mode at the current resolution: the game is drawn with interpolated frames above 60 Hz.
+    private float mRefreshRate = 60f;
+
+    private void preferHighRefreshRate() {
+        android.view.Display display = getWindowManager().getDefaultDisplay();
+        android.view.Display.Mode current = display.getMode(), best = current;
+        for (android.view.Display.Mode m : display.getSupportedModes()) {
+            if (m.getPhysicalWidth() == current.getPhysicalWidth() && m.getPhysicalHeight() == current.getPhysicalHeight()
+                    && m.getRefreshRate() > best.getRefreshRate()) {
+                best = m;
+            }
+        }
+        mRefreshRate = best.getRefreshRate();
+        android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.preferredDisplayModeId = best.getModeId();
+        getWindow().setAttributes(lp);
     }
 
     private void hideSystemBars() {
@@ -189,7 +208,11 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
     // ------------------------------------------------------------------------------------------ surface
     @Override
-    public void surfaceCreated(SurfaceHolder holder) {}
+    public void surfaceCreated(SurfaceHolder holder) {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            holder.getSurface().setFrameRate(mRefreshRate, android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+        }
+    }
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {

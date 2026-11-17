@@ -234,7 +234,16 @@ typedef struct Batch {
 static Batch *s_batches;
 static size_t s_batch_cap;
 
-static void push_polygon(const Gx3dFrame *f, const GxPolygon *p, Vertex **out, GLuint tex) {
+// The same polygon in the previous list: same place in the list and same shape, texture and attributes.
+static bool same_polygon(const GxPolygon *a, const GxPolygon *b) {
+    return a->count == b->count && a->teximage == b->teximage && a->pltt == b->pltt &&
+           (a->attr & ~0x001f0000u) == (b->attr & ~0x001f0000u);
+}
+
+// `prev`/`pp`: the polygon in the previous list, to draw it at fraction `t` of the way from there (frame
+// interpolation at display rates above the game's 60 Hz); NULL to draw it as it is.
+static void push_polygon(const Gx3dFrame *f, const GxPolygon *p, Vertex **out, GLuint tex, const Gx3dFrame *prev,
+                         const GxPolygon *pp, float t) {
     uint32_t alpha = (p->attr >> 16) & 31;
     if (alpha == 0) alpha = 31; // wireframe: drawn filled
     uint32_t mode = (p->attr >> 4) & 3;
@@ -242,7 +251,15 @@ static void push_polygon(const Gx3dFrame *f, const GxPolygon *p, Vertex **out, G
     Vertex v[4];
     for (int k = 0; k < p->count; k++) {
         const GxVertex *g = &f->vertices[p->first + k];
-        v[k] = (Vertex) {g->x / 4096.0f, g->y / 4096.0f, g->z / 4096.0f, g->w / 4096.0f,
+        float x = (float) g->x, y = (float) g->y, z = (float) g->z, w = (float) g->w;
+        if (pp) {
+            const GxVertex *o = &prev->vertices[pp->first + k];
+            x = o->x + (x - o->x) * t;
+            y = o->y + (y - o->y) * t;
+            z = o->z + (z - o->z) * t;
+            w = o->w + (w - o->w) * t;
+        }
+        v[k] = (Vertex) {x / 4096.0f, y / 4096.0f, z / 4096.0f, w / 4096.0f,
                          g->r / 31.0f, g->g / 31.0f, g->b / 31.0f, alpha / 31.0f,
                          g->s, g->t, m};
     }
@@ -254,8 +271,11 @@ static void push_polygon(const Gx3dFrame *f, const GxPolygon *p, Vertex **out, G
     }
 }
 
-uint32_t gl3d_render(const Gx3dFrame *f, const FrameSnapshot *snap, int scale, float wide) {
-    int w = 256 * scale, h = 192 * scale;
+uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const FrameSnapshot *snap, int scale,
+                     float wide) {
+    int w = (int) (256 * scale * wide + 0.5f), h = 192 * scale;
+    float sx = w / 256.0f; // horizontal pixels per DS pixel
+    if (prev && (t >= 1.0f || prev->vertex_count == 0)) prev = NULL;
     ensure_target(w, h);
     VramMap map;
     vram_map_build(&map, snap->vramcnt);
@@ -306,7 +326,10 @@ uint32_t gl3d_render(const Gx3dFrame *f, const FrameSnapshot *snap, int scale, f
                 b->id = id;
             }
             Vertex *start = out;
-            push_polygon(f, p, &out, tex);
+            const GxPolygon *pp = prev && i < prev->polygon_count && same_polygon(&prev->polygons[i], p)
+                                      ? &prev->polygons[i]
+                                      : NULL;
+            push_polygon(f, p, &out, tex, prev, pp, t);
             b->count += (uint32_t) (out - start);
         }
     }
@@ -323,7 +346,7 @@ uint32_t gl3d_render(const Gx3dFrame *f, const FrameSnapshot *snap, int scale, f
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
     glUseProgram(s_prog);
-    glUniform1f(s_u_wide, wide);
+    glUniform1f(s_u_wide, 1.0f); // the game projects the wide view itself (g_port_aspect)
     float alpha_ref = (f->disp3dcnt & 4) ? f->alpha_ref / 31.0f : 0.0f;
     glUniform1f(s_u_alpha_ref, alpha_ref > 0 ? alpha_ref : -1.0f);
     glUniform1i(s_u_highlight, (f->disp3dcnt & 2) != 0);
@@ -347,7 +370,7 @@ uint32_t gl3d_render(const Gx3dFrame *f, const FrameSnapshot *snap, int scale, f
         if (!b->count) continue;
         int vx = b->viewport[0], vy = b->viewport[1];
         int vw = b->viewport[2] - vx + 1, vh = b->viewport[3] - vy + 1;
-        glViewport(vx * scale, vy * scale, vw * scale, vh * scale);
+        glViewport((GLint) (vx * sx + 0.5f), vy * scale, (GLsizei) (vw * sx + 0.5f), vh * scale);
         glDepthFunc((b->attr & (1u << 14)) ? GL_EQUAL : GL_LESS);
         if (b->tex) {
             glBindTexture(GL_TEXTURE_2D, b->tex);

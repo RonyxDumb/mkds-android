@@ -20,6 +20,7 @@ void guest_input_set(const PortInput *in);
 void guest_save_flush(void);
 void guest_set_paused(bool paused);
 void guest_set_vblank_rate(uint32_t mhz);
+void guest_set_aspect(int32_t fx12); // race camera aspect ratio (20.12), from the next race
 uint64_t guest_frame_count(void);
 // Tests: the game stops after each frame until `done` is posted; `ready` is posted when a frame is captured.
 void guest_set_lockstep(void *ready, void *done);

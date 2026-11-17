@@ -1,7 +1,8 @@
 /* Force-included in every decomp translation unit of the native port (clang).
  * Maps CodeWarrior intrinsics and extensions onto clang equivalents. */
 #pragma once
-#define PLATFORM_PORT 1
+#define PLATFORM_PORT
+extern int g_port_aspect; // race camera aspect ratio (platform/frame.c) 1
 
 
 /* mwcc intrinsics */

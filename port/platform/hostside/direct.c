@@ -57,6 +57,8 @@ void guest_input_set(const PortInput *in) { port_input_set(in); }
 void guest_save_flush(void) { port_save_flush(); }
 void guest_set_paused(bool paused) { g_paused = paused; }
 void guest_set_vblank_rate(uint32_t mhz) { g_vblank_rate_mhz = mhz; }
+extern int g_port_aspect;
+void guest_set_aspect(int32_t fx12) { g_port_aspect = fx12; }
 uint64_t guest_frame_count(void) { return g_frame_count; }
 void guest_set_lockstep(void *ready, void *done) {
     g_lockstep_ready = ready;

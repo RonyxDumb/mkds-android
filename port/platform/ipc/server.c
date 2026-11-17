@@ -69,6 +69,7 @@ int main(int argc, char **argv) {
     port_save_set_path(argv[4]);
 
     uint32_t rate = atomic_load(&s->vblank_rate), paused = 0, input_seq = 0, flush = 0, captures = 0;
+    int32_t aspect = 0;
     guest_set_vblank_rate(rate);
     PortInput *in = host_low_alloc(sizeof(*in));
     guest_start_game();
@@ -103,6 +104,8 @@ int main(int argc, char **argv) {
             atomic_store(&s->flush_ack, flush = req);
         }
 
+        int32_t a = atomic_load(&s->aspect);
+        if (a && a != aspect) guest_set_aspect(aspect = a);
         uint32_t c = atomic_load(&s->captures);
         if (c != captures) {
             captures = c;

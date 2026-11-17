@@ -118,3 +118,18 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setPaused(JNIEnv *env, jclass c
         guest_save_flush();
     }
 }
+
+// Widescreen: the race view's aspect ratio (the whole display); applies from the next race.
+JNIEXPORT void JNICALL Java_com_mkds_port_Native_setWideAspect(JNIEnv *env, jclass cls, jfloat aspect) {
+    (void) env, (void) cls;
+    extern void present_set_wide(float aspect);
+    present_set_wide(aspect);
+    guest_set_aspect((int32_t) (aspect * 4096.0f + 0.5f));
+}
+
+// Whether the game shows a race (the activity picks the screen layout from it).
+JNIEXPORT jboolean JNICALL Java_com_mkds_port_Native_isRace(JNIEnv *env, jclass cls) {
+    (void) env, (void) cls;
+    extern bool present_is_race(void);
+    return present_is_race();
+}

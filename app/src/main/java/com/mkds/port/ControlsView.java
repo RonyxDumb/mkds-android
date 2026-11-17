@@ -12,8 +12,12 @@ import android.view.View;
 /**
  * Screen layout and touch controls for playing on a phone in landscape.
  *
- * The main screen (the top one, or the touch screen after a swap) is as large as the height allows, the other one sits
- * small in the top right corner. Controls:
+ * Two layouts, chosen from what the game shows:
+ *  - race: the top screen fills the display in widescreen (the game renders the wider view), the touch screen (map
+ *    and ranking) is a small inset in the top right corner; the swap button hides or shows it;
+ *  - menus: both screens side by side, as large as fits, the touch screen on the right for tapping; the swap button
+ *    exchanges them.
+ * Controls:
  *  - left half: a floating stick that appears where the thumb lands and stays with that finger (the D-pad);
  *  - right side: a big A with R right above it (one thumb between them holds both: accelerate and drift), B, L (item),
  *    X and Y; a finger can slide from button to button;
@@ -54,9 +58,20 @@ final class ControlsView extends View {
     }
 
     private final SparseArray<Finger> mFingers = new SparseArray<>();
-    private final RectF mMain = new RectF(), mSmall = new RectF();
-    private RectF mTouchRect = mSmall;
-    private boolean mSwapped;
+    private final RectF mTopRect = new RectF(), mBottomRect = new RectF();
+    private RectF mTouchRect = mBottomRect;
+    private boolean mSwapped, mInsetHidden, mRace;
+    private final Runnable mPoll = new Runnable() {
+        @Override
+        public void run() {
+            boolean race = Native.isRace();
+            if (race != mRace) {
+                mRace = race;
+                applyScreens();
+            }
+            postDelayed(this, 150);
+        }
+    };
     private int mWidth, mHeight;
     private float mUnit;
     private final Paint mFill = new Paint(Paint.ANTI_ALIAS_FLAG), mText = new Paint(Paint.ANTI_ALIAS_FLAG),
@@ -78,14 +93,10 @@ final class ControlsView extends View {
         mWidth = w;
         mHeight = h;
         float u = mUnit = Math.min(h / 8f, w / 15f);
-        // Screens.
-        float mainW = Math.min(h * 4f / 3f, w * 0.72f), mainH = mainW * 3f / 4f;
-        float margin = (w - mainW) / 2;
-        float smallW = Math.max(margin, u * 3.2f), smallH = smallW * 3f / 4f;
-        float left = Math.max(0, Math.min(margin, w - mainW - smallW));
-        mMain.set(left, (h - mainH) / 2, left + mainW, (h + mainH) / 2);
-        mSmall.set(w - smallW, 0, w, smallH);
+        Native.setWideAspect((float) w / h);
         applyScreens();
+        removeCallbacks(mPoll);
+        post(mPoll);
 
         // Right hand: A big, R above it, close enough for one thumb to cover both; B to the left of A; L and X/Y above B.
         place(mA, w - u * 1.45f, h - u * 1.55f, u * 0.95f);
@@ -104,7 +115,22 @@ final class ControlsView extends View {
     }
 
     private void applyScreens() {
-        RectF top = mSwapped ? mSmall : mMain, bottom = mSwapped ? mMain : mSmall;
+        int w = mWidth, h = mHeight;
+        if (w == 0) return;
+        RectF top = mTopRect, bottom = mBottomRect;
+        if (mRace) {
+            // The race fills the display; the map is a small inset (or hidden).
+            top.set(0, 0, w, h);
+            float ih = h * 0.34f, iw = ih * 4f / 3f;
+            if (mInsetHidden) bottom.set(w, 0, w, 0);
+            else bottom.set(w - iw, 0, w, ih);
+        } else {
+            // Menus: both screens side by side.
+            float sw = Math.min(w / 2f, h * 4f / 3f), sh = sw * 3f / 4f, y = (h - sh) / 2, x = (w - 2 * sw) / 2;
+            RectF left = mSwapped ? bottom : top, right = mSwapped ? top : bottom;
+            left.set(x, y, x + sw, y + sh);
+            right.set(x + sw, y, x + 2 * sw, y + sh);
+        }
         mTouchRect = bottom;
         Native.setLayout(Math.round(top.left), Math.round(top.top), Math.round(top.width()), Math.round(top.height()),
                 Math.round(bottom.left), Math.round(bottom.top), Math.round(bottom.width()), Math.round(bottom.height()));
@@ -161,10 +187,11 @@ final class ControlsView extends View {
             if (bits != 0) {
                 f.role = ROLE_BUTTONS;
                 if ((bits & SWAP) != 0) {
-                    mSwapped = !mSwapped;
+                    if (mRace) mInsetHidden = !mInsetHidden;
+                    else mSwapped = !mSwapped;
                     applyScreens();
                 }
-            } else if (mTouchRect.contains(x, y)) {
+            } else if (mTouchRect.width() > 0 && mTouchRect.contains(x, y)) {
                 f.role = ROLE_STYLUS;
             } else if (x < mWidth * 0.5f) {
                 f.role = ROLE_STICK;

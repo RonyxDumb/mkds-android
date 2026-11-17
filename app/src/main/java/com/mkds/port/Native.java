@@ -27,5 +27,11 @@ final class Native {
 
     static native void setPaused(boolean paused);
 
+    /** Widescreen: the aspect ratio of the race view (the whole display). */
+    static native void setWideAspect(float aspect);
+
+    /** Whether the game is showing a race (the layout depends on it). */
+    static native boolean isRace();
+
     private Native() {}
 }

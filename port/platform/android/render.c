@@ -10,6 +10,7 @@
 #include <android/native_window.h>
 #include <pthread.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -34,6 +35,9 @@ static void *render_thread(void *arg) {
     EGLSurface surf = EGL_NO_SURFACE;
     ANativeWindow *window = NULL;
     bool gl_ready = false;
+    uint64_t snap_time = 0, last_swap = 0;
+    double swap_interval = 1.0 / 60; // measured display period (smoothed)
+    const double game_period = 1.0 / 59.8261;
 
     for (;;) {
         pthread_mutex_lock(&s_lock);
@@ -77,10 +81,30 @@ static void *render_thread(void *arg) {
             int scale = (rect_h + 191) / 192;
             if (scale < 1) scale = 1;
             if (scale > 6) scale = 6;
-            present_update(f, scale, 1.0f);
+            present_update(f, scale);
+            snap_time = f->time_ns;
         }
-        present_draw(layout, w, h);
+        // Above 60 Hz the 3D is drawn between the last two game frames, one game frame behind (the snapshot taken
+        // at snap_time is reached one period later), so that motion is smooth at 90, 120 or 144 Hz.
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint64_t now = (uint64_t) ts.tv_sec * 1000000000ull + (uint64_t) ts.tv_nsec;
+        float t = 1.0f;
+        if (swap_interval < 1.0 / 75 && snap_time) {
+            double since = (double) (int64_t) (now - snap_time) / 1e9;
+            t = (float) (since / game_period);
+            if (t < 0) t = 0;
+            if (t > 1) t = 1;
+        }
+        present_draw(layout, w, h, t);
         eglSwapBuffers(dpy, surf);
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint64_t after = (uint64_t) ts.tv_sec * 1000000000ull + (uint64_t) ts.tv_nsec;
+        if (last_swap) {
+            double d = (double) (after - last_swap) / 1e9;
+            if (d < 0.1) swap_interval = swap_interval * 0.95 + d * 0.05;
+        }
+        last_swap = after;
     }
     return NULL;
 }

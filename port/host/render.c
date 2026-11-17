@@ -102,6 +102,7 @@ static void write_png(const char *path, const uint32_t *rgba, int w, int h) {
     free(z);
 }
 
+extern float g_host_aspect;
 #ifdef HOST_GL
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
@@ -111,7 +112,11 @@ static void write_png(const char *path, const uint32_t *rgba, int w, int h) {
 #define GL_SCALE 3
 static bool gl_frame(const FrameSnapshot *f, const char *path) {
     static bool ready, failed;
-    static const int W = 256 * GL_SCALE, H = 384 * GL_SCALE;
+    static int W, H;
+    if (!W) {
+        W = (int) (192 * GL_SCALE * g_host_aspect + 0.5f) & ~3;
+        H = 384 * GL_SCALE;
+    }
     if (failed) return false;
     if (!ready) {
         EGLDisplay dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
@@ -139,16 +144,20 @@ static bool gl_frame(const FrameSnapshot *f, const char *path) {
         present_init();
         ready = true;
     }
-    present_update(f, GL_SCALE, 1.0f);
+    present_update(f, GL_SCALE);
+    present_set_wide(g_host_aspect);
     const int layout[8] = {0, 0, W, H / 2, 0, H / 2, W, H / 2};
-    present_draw(layout, W, H);
-    static uint32_t pixels[256 * GL_SCALE * 384 * GL_SCALE], flipped[256 * GL_SCALE * 384 * GL_SCALE];
+    const char *interp = getenv("MKDS_INTERP"); // tests: draw the 3D between the last two frames
+    present_draw(layout, W, H, interp ? (float) atof(interp) : 1.0f);
+    static uint32_t pixels[768 * GL_SCALE * 384 * GL_SCALE], flipped[768 * GL_SCALE * 384 * GL_SCALE];
     glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     for (int y = 0; y < H; y++) memcpy(flipped + y * W, pixels + (H - 1 - y) * W, W * 4);
     write_png(path, flipped, W, H);
     return true;
 }
 #endif
+
+float g_host_aspect = 4.0f / 3.0f; // --wide: the top screen's aspect ratio (OpenGL output only)
 
 void host_write_frame(const FrameSnapshot *f, const char *path) {
 #ifdef HOST_GL

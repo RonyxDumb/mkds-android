@@ -29,4 +29,5 @@ typedef struct GuestHeader {
     uint32_t frame_count;   // uint64_t *
     uint32_t lockstep_ready; // void ** (tests)
     uint32_t lockstep_done;  // void **
+    uint32_t aspect;         // int32_t *: race camera aspect ratio, 20.12 fixed point
 } GuestHeader;

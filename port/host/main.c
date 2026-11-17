@@ -58,6 +58,7 @@ static void wav_header(FILE *f, uint32_t frames) {
 
 // One captured frame: scripted input for the next one, audio, image.
 static bool s_bglog;
+static int32_t s_wide_fx;
 static bool on_frame(const FrameSnapshot *f, uint64_t n) {
     if (s_bglog) {
         const uint16_t *io = (const uint16_t *) f->io;
@@ -91,7 +92,7 @@ static bool on_frame(const FrameSnapshot *f, uint64_t n) {
         char path[512];
         snprintf(path, sizeof(path), "%s/frame_%05llu.png", s_out, (unsigned long long) n);
         host_write_frame(f, path);
-        port_log("frame %llu: DISPCNT A %08x B %08x, 3D %u polygons, POWCNT %04x", (unsigned long long) n,
+        port_log("frame %llu (scene %d, capcnt %02x%02x%02x%02x): DISPCNT A %08x B %08x, 3D %u polygons, POWCNT %04x", (unsigned long long) n, f->scene, f->io[0x67], f->io[0x66], f->io[0x65], f->io[0x64],
                  *(uint32_t *) f->io, *(uint32_t *) (f->io + 0x1000), f->frame3d.polygon_count,
                  *(uint16_t *) (f->io + 0x304));
     }
@@ -152,6 +153,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--press") && i + 1 < argc) parse_press(argv[++i]);
         else if (!strcmp(argv[i], "--realtime")) rate = 59826;
         else if (!strcmp(argv[i], "--bglog")) s_bglog = true;
+        else if (!strcmp(argv[i], "--wide") && i + 1 < argc) {
+            extern float g_host_aspect;
+            g_host_aspect = (float) atof(argv[++i]);
+            s_wide_fx = (int32_t) (g_host_aspect * 4096 + 0.5f);
+        }
         else if (!strcmp(argv[i], "--keyon")) {
             extern bool g_snd_keyon_log __attribute__((weak)); // not reachable in the arm64 split build
             if (&g_snd_keyon_log) g_snd_keyon_log = true;
@@ -201,6 +207,7 @@ int main(int argc, char **argv) {
     }
     port_save_set_path(save);
     guest_set_vblank_rate(rate);
+    if (s_wide_fx) guest_set_aspect(s_wide_fx);
     void *ready = hapi_sem_new(), *done = hapi_sem_new();
     guest_set_lockstep(ready, done);
     guest_start_game();

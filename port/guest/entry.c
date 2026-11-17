@@ -16,6 +16,7 @@ static void guest_start(void) {
     port_os_run(GameMain);
 }
 
+extern int g_port_aspect;
 __attribute__((section(".guest_header"), used)) const GuestHeader g_guest_header = {
     .magic = GUEST_MAGIC,
     .imports = (uint32_t) (uintptr_t) g_host_imports,
@@ -28,6 +29,7 @@ __attribute__((section(".guest_header"), used)) const GuestHeader g_guest_header
     .paused = (uint32_t) (uintptr_t) &g_paused,
     .quit = (uint32_t) (uintptr_t) &g_quit,
     .vblank_rate = (uint32_t) (uintptr_t) &g_vblank_rate_mhz,
+    .aspect = (uint32_t) (uintptr_t) &g_port_aspect,
     .frame_count = (uint32_t) (uintptr_t) &g_frame_count,
     .lockstep_ready = (uint32_t) (uintptr_t) &g_lockstep_ready,
     .lockstep_done = (uint32_t) (uintptr_t) &g_lockstep_done,

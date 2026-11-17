@@ -8,6 +8,11 @@
 #include <string.h>
 
 void port_tp_vblank(void);
+int GetCurrentSceneNumber(void);
+
+// Aspect ratio of the race cameras (20.12): 4:3 on the DS, the screen's for widescreen (tools/portify.py points the
+// camera setup here).
+int g_port_aspect = 0x1555;
 
 void (*g_frame_hook)(const FrameSnapshot *snapshot);
 // Tests: when set, each captured frame posts `ready` and waits for `done` (host semaphores).
@@ -35,6 +40,8 @@ static void capture(FrameSnapshot *f) {
     memcpy(d->polygons, g->polygons, sizeof(GxPolygon) * g->polygon_count);
     size_t header = offsetof(Gx3dFrame, vertex_count);
     memcpy((uint8_t *) d + header, (const uint8_t *) g + header, sizeof(Gx3dFrame) - header);
+    f->scene = (uint8_t) GetCurrentSceneNumber();
+    f->time_ns = hapi_now_ns();
     f->number = ++s_number;
 }
 

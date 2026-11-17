@@ -33,6 +33,7 @@ typedef struct IpcShared {
     _Atomic uint32_t flush_req, flush_ack;
     _Atomic uint32_t audio_rate, audio_burst;
     _Atomic uint32_t captures; // display captures done by the renderer
+    _Atomic int32_t aspect;    // race camera aspect ratio (20.12), 0 = unchanged
 
     // game -> app
     _Atomic uint32_t frame_count;
@@ -53,6 +54,8 @@ static inline void ipc_copy_snapshot(FrameSnapshot *dst, const FrameSnapshot *sr
     __builtin_memcpy(b->polygons, a->polygons, np * sizeof(GxPolygon));
     __builtin_memcpy(&b->vertex_count, &a->vertex_count, sizeof(Gx3dFrame) - offsetof(Gx3dFrame, vertex_count));
     dst->number = src->number;
+    dst->scene = src->scene;
+    dst->time_ns = src->time_ns;
 }
 
 // App side (ipc/client.c): starts the game process. NULL on success, else a message for the user.
