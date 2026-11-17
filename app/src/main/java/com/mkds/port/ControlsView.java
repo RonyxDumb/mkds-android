@@ -121,6 +121,18 @@ final class ControlsView extends View {
         b.r = r;
     }
 
+    private int mPulseButtons;
+
+    /** Presses buttons for a moment (the system back gesture pauses a race with START). */
+    void pulse(int buttons) {
+        mPulseButtons |= buttons;
+        send();
+        postDelayed(() -> {
+            mPulseButtons &= ~buttons;
+            send();
+        }, 120);
+    }
+
     void setPadButtons(int b) {
         mPadButtons = b;
         send();
@@ -132,7 +144,7 @@ final class ControlsView extends View {
     }
 
     private void send() {
-        Native.setInput(mTouchButtons | mPadButtons | mStickButtons, mTouching, mTouchX, mTouchY);
+        Native.setInput(mTouchButtons | mPadButtons | mStickButtons | mPulseButtons, mTouching, mTouchX, mTouchY);
     }
 
     // Buttons under a point: slightly larger than drawn, so that a thumb between A and R holds both.

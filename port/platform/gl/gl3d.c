@@ -287,8 +287,17 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
             uint32_t slot = sig & ((1u << MATCH_BITS) - 1);
             while (s_match_key[slot] && s_match_key[slot] != sig) slot = (slot + 1) & ((1u << MATCH_BITS) - 1);
             if (s_match_key[slot]) {
+                // Identical objects (item boxes, karts): the one nearest to where this one is now.
+                const GxVertex *b = &f->vertices[p->first];
+                float best_d = 0;
                 for (int32_t j = s_match_first[slot]; j >= 0; j = s_match_next[j]) {
-                    if (best < 0 || abs(j - want) < abs(best - want)) best = j;
+                    const GxVertex *a = &prev->vertices[prev->polygons[j].first];
+                    float d = fabsf((float) (a->x - b->x)) + fabsf((float) (a->y - b->y)) +
+                              fabsf((float) (a->w - b->w)) + (float) abs(j - want);
+                    if (best < 0 || d < best_d) {
+                        best = j;
+                        best_d = d;
+                    }
                 }
             }
         }
@@ -449,7 +458,16 @@ uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const F
         if (xs > 1.0f) xs = 1.0f;
         float left = (w - w * xs) / 2;
         glViewport((GLint) (left + vx * sx * xs + 0.5f), vy * scale, (GLsizei) (vw * sx * xs + 0.5f), vh * scale);
-        glDepthFunc((b->attr & (1u << 14)) ? GL_EQUAL : GL_LESS);
+        // Depth "equal" (decals such as the karts' emblems): the DS accepts depths within a small margin; a
+        // polygon offset towards the viewer with less-or-equal does the same.
+        bool equal = b->attr & (1u << 14);
+        glDepthFunc(equal ? GL_LEQUAL : GL_LESS);
+        if (equal) {
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(-1.0f, -4.0f);
+        } else {
+            glDisable(GL_POLYGON_OFFSET_FILL);
+        }
         if (b->tex) {
             glBindTexture(GL_TEXTURE_2D, b->tex);
             set_wrap(b->teximage);
@@ -504,6 +522,7 @@ uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const F
         glDrawArrays(GL_TRIANGLES, (GLint) b->first, (GLsizei) b->count);
     }
     glDisable(GL_STENCIL_TEST);
+    glDisable(GL_POLYGON_OFFSET_FILL);
     glStencilMask(0xff);
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);

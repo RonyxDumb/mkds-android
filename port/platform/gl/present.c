@@ -214,7 +214,7 @@ void present_update(const FrameSnapshot *f, int scale) {
         s_cur3d ^= 1;
         copy_list(&s_frames3d[s_cur3d], &f->frame3d);
     }
-    s_shown.race = f->scene == 2 && !s_shown.software;
+    s_shown.race = f->scene == 2;
     s_shown.scale = scale;
     s_shown.snap = f;
     s_last_number = f->number;

@@ -167,6 +167,22 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         setContentView(root);
         hideSystemBars();
         preferHighRefreshRate();
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::onGameBack);
+        }
+    }
+
+    // Back does not leave the game: in a race it pauses (START), elsewhere it does nothing.
+    private void onGameBack() {
+        if (mControls != null && Native.isRace()) mControls.pulse(Native.START);
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        if (sStarted) onGameBack();
+        else super.onBackPressed();
     }
 
     // The display's fastest mode at the current resolution: the game is drawn with interpolated frames above 60 Hz.
