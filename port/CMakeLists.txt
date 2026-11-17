@@ -52,6 +52,7 @@ target_compile_options(game PRIVATE
     -fcommon               # tentative definitions shared between files, as CodeWarrior allows
     -fshort-wchar          # wchar_t is 16 bits on the DS
     -Dconst=               # constant data is RAM on the DS and the game patches some of it: keep it writable
+    -fno-zero-initialized-in-bss # keep data in definition order: some tables run on into the next definition
     -ffunction-sections
     -w)
 # Plain char: unsigned in game code, signed in the libraries (tools/project.py).

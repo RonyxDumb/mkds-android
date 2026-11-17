@@ -153,8 +153,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--realtime")) rate = 59826;
         else if (!strcmp(argv[i], "--bglog")) s_bglog = true;
         else if (!strcmp(argv[i], "--keyon")) {
-            extern bool g_snd_keyon_log;
-            g_snd_keyon_log = true;
+            extern bool g_snd_keyon_log __attribute__((weak)); // not reachable in the arm64 split build
+            if (&g_snd_keyon_log) g_snd_keyon_log = true;
         }
         else if (!strcmp(argv[i], "--wav") && i + 1 < argc) {
             s_wav = fopen(argv[++i], "wb");

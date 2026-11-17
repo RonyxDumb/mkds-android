@@ -49,9 +49,13 @@ def main():
     includes = ["-I", str(gen / "include"), "-I", str(PORT / "platform" / "include"), "-I", str(PORT / "platform"),
                 "-I", str(PORT / "guest")]
     # The game's own C library headers come first for its code; the guest's minimal ones for the platform layer.
-    game_flags = common + ["-I", str(gen / "msl_include")] + includes + [
+    # The game's data must keep the original layout: some tables run on into the next definition (an array declared
+    # with one element read further). GCC keeps definition order with -fno-toplevel-reorder, natural alignment of
+    # arrays only when optimising for size (otherwise AArch64 aligns them to 8 or 16), and zero data next to the rest
+    # with -fno-zero-initialized-in-bss.
+    game_flags = [f if f != "-O2" else "-Os" for f in common] + ["-I", str(gen / "msl_include")] + includes + [
         "-I", str(PORT / "guest" / "include"), "-include", str(PORT / "compat" / "port_prefix.h"),
-        "-fshort-wchar", "-Dconst=", "-w"]
+        "-fshort-wchar", "-Dconst=", "-fno-toplevel-reorder", "-fno-zero-initialized-in-bss", "-w"]
     platform_flags = common + ["-I", str(PORT / "guest" / "include")] + includes + ["-Wall", "-Wno-unused-function"]
 
     lines = [
