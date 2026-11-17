@@ -61,6 +61,9 @@ static struct {
     bool swap_pending;
     uint32_t swap_param;
     uint32_t draw_tag;
+    uint32_t prim_index;   // polygons begun in the current vertex block
+    int32_t proj_aspect;   // of the projection matrix
+    bool proj_aspect_dirty;
 } G;
 
 // ------------------------------------------------------------------------------------------------ matrix helpers
@@ -105,7 +108,7 @@ static void update_result_registers(void);
 
 static void apply_load(const Mtx *n) {
     switch (G.mode) {
-    case 0: G.proj = *n; break;
+    case 0: G.proj = *n; G.proj_aspect_dirty = true; break;
     case 1: G.pos = *n; break;
     case 2: G.pos = *n; G.vec = *n; break;
     case 3: G.tex = *n; break;
@@ -116,7 +119,7 @@ static void apply_load(const Mtx *n) {
 // Current = N * Current. Mode 2 multiplies the direction matrix too (except for SCALE).
 static void apply_mult(const Mtx *n, bool scale) {
     switch (G.mode) {
-    case 0: mtx_mul(&G.proj, n, &G.proj); break;
+    case 0: mtx_mul(&G.proj, n, &G.proj); G.proj_aspect_dirty = true; break;
     case 1: mtx_mul(&G.pos, n, &G.pos); break;
     case 2:
         mtx_mul(&G.pos, n, &G.pos);
@@ -201,6 +204,7 @@ static int32_t det3(int64_t a0, int64_t a1, int64_t a2, int64_t b0, int64_t b1, 
 
 static void emit_polygon(const GxVertex *v, int count) {
     Gx3dFrame *f = building();
+    uint32_t index_in_block = G.prim_index++;
     // Entirely outside one clip plane: dropped, as the DS does.
     for (int plane = 0; plane < 6; plane++) {
         int outside = 0;
@@ -235,14 +239,18 @@ static void emit_polygon(const GxVertex *v, int count) {
     p->attr = attr;
     p->teximage = G.teximage;
     p->pltt = G.pltt;
-    p->tag = G.draw_tag;
-    if (!f->proj_aspect) {
-        // The width of the view the projection maps to the screen, relative to its height: wider than 4:3 when the
-        // game projects the widescreen view (g_port_aspect).
+    p->tag = index_in_block;
+    // The width of the view the projection maps to the screen, relative to its height: wider than 4:3 when the game
+    // projects the widescreen view (g_port_aspect).
+    if (G.proj_aspect_dirty) {
+        G.proj_aspect_dirty = false;
         int64_t sx = G.proj.m[0] < 0 ? -(int64_t) G.proj.m[0] : G.proj.m[0];
         int64_t sy = G.proj.m[5] < 0 ? -(int64_t) G.proj.m[5] : G.proj.m[5];
-        f->proj_aspect = sx ? (int32_t) (sy * 4096 / sx) : 0x1555;
+        G.proj_aspect = sx ? (int32_t) (sy * 4096 / sx) : 0x1555;
+        if (G.proj_aspect < 0x800 || G.proj_aspect > 0x4000) G.proj_aspect = 0x1555; // not a screen projection
     }
+    p->aspect = G.proj_aspect;
+    if (!f->proj_aspect) f->proj_aspect = G.proj_aspect;
     memcpy(&f->vertices[f->vertex_count], v, sizeof(GxVertex) * count);
     f->vertex_count += count;
 }
@@ -412,6 +420,7 @@ static void execute(uint32_t cmd) {
     case 0x12: { // POP
         if (G.mode == 0) {
             G.proj = G.proj_stack[0];
+            G.proj_aspect_dirty = true;
             G.proj_sp = 0;
         } else if (G.mode == 3) {
             G.tex = G.tex_stack[0];
@@ -441,6 +450,7 @@ static void execute(uint32_t cmd) {
     case 0x14: // RESTORE
         if (G.mode == 0) {
             G.proj = G.proj_stack[0];
+            G.proj_aspect_dirty = true;
         } else if (G.mode == 3) {
             G.tex = G.tex_stack[0];
         } else {
@@ -572,6 +582,7 @@ static void execute(uint32_t cmd) {
         G.strip_count = 0;
         G.strip_total = 0;
         G.polyattr = G.polyattr_pending;
+        G.prim_index = 0;
         G.draw_tag = G.draw_tag * 31 + (uint32_t) G.clip.m[12] * 7 + (uint32_t) G.clip.m[13];
         break;
     case 0x41: break; // END_VTXS: nothing to do
@@ -675,6 +686,7 @@ void gx3d_command(uint32_t cmd, uint32_t param) { feed(cmd, param); }
 void gx3d_init(void) {
     memset(&G, 0, sizeof(G));
     mtx_identity(&G.proj);
+    G.proj_aspect_dirty = true;
     mtx_identity(&G.pos);
     mtx_identity(&G.vec);
     mtx_identity(&G.tex);

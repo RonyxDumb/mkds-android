@@ -107,7 +107,8 @@ typedef struct Channel {
     int attack, decay, sustain, release;
     int length; // remaining ticks of the note, -1 = until released
     int priority;
-    int user_db;    // track/player volume in 0.1 dB
+    int user_db;    // track/player volume in 0.1 dB (the last ones, once the track has let go)
+    int user_pitch; // track pitch bend and pitch, 1/64 semitone
     int pan, user_pan;
     Lfo lfo;
     int track; // owning track, -1 none
@@ -792,11 +793,15 @@ static void update_channel_params(Channel *c) {
     int pitch = (c->key - c->base_key) * 64;
     int pan = c->pan;
     if (t) {
-        db += s_decibel_sq[t->volume & 127] + s_decibel_sq[t->volume2 & 127] + t->ext_fader;
-        db += s_decibel_sq[pl->volume & 127] + pl->ext_fader;
-        pitch += t->pitch_bend * t->bend_range * 64 / 128 + t->ext_pitch;
-        pan += t->pan + t->ext_pan;
+        // Kept for after the track lets the channel go (it fades out with the track's volume, pitch and pan).
+        c->user_db = s_decibel_sq[t->volume & 127] + s_decibel_sq[t->volume2 & 127] + t->ext_fader +
+                     s_decibel_sq[pl->volume & 127] + pl->ext_fader;
+        c->user_pitch = t->pitch_bend * t->bend_range * 64 / 128 + t->ext_pitch;
+        c->user_pan = t->pan + t->ext_pan;
     }
+    db += c->user_db;
+    pitch += c->user_pitch;
+    pan += c->user_pan;
     // Sweep / portamento.
     if (c->sweep_pitch && c->sweep_length > 0 && c->sweep_counter < c->sweep_length) {
         pitch += c->sweep_pitch * (c->sweep_length - c->sweep_counter) / c->sweep_length;

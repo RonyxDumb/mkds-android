@@ -235,11 +235,9 @@ bool present_engine_a_on_top(void) { return s_shown.a_on_top; }
 
 void present_draw(const int layout[8], int w, int h, float t) {
     GLuint tex3d = 0;
-    // The 3D is as wide as the game projected it (wider than 4:3 for the widescreen cameras).
-    const Gx3dFrame *cur = &s_frames3d[s_cur3d];
-    float wide = cur->proj_aspect > 0 ? cur->proj_aspect / (4096.0f * 4.0f / 3.0f) : 1.0f;
-    if (wide < 1.05f) wide = 1.0f;
-    if (wide > s_wide) wide = s_wide;
+    // The 3D layer is as wide as the 2D of its screen (widescreen on the top screen).
+    // (Each polygon keeps the proportions of its own projection: gl3d narrows those projected for 4:3.)
+    float wide = (float) (s_shown.a_on_top ? s_shown.width_top : 256) / 256.0f;
     if (!s_shown.software && s_shown.snap) {
         tex3d = gl3d_render(&s_frames3d[s_cur3d], s_have_prev ? &s_frames3d[s_cur3d ^ 1] : NULL, t, s_shown.snap,
                             s_shown.scale, wide);

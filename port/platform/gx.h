@@ -27,7 +27,8 @@ typedef struct GxPolygon {
     uint32_t attr;       // POLYGON_ATTR latched at BEGIN_VTXS
     uint32_t teximage;   // TEXIMAGE_PARAM
     uint32_t pltt;       // PLTT_BASE
-    uint32_t tag;        // identity of the draw call for frame interpolation (matrix + command position hash)
+    uint32_t tag;        // place in its vertex block (BEGIN_VTXS), counting culled ones: identity for interpolation
+    int32_t aspect;      // aspect ratio of its projection (20.12): 4:3 views keep their shape on a wide screen
 } GxPolygon;
 
 typedef struct Gx3dFrame {

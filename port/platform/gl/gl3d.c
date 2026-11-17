@@ -228,6 +228,7 @@ typedef struct Batch {
     uint32_t attr;
     uint8_t viewport[4];
     uint8_t id; // polygon ID
+    int32_t aspect; // of the projection
     bool translucent, shadow, shadow_mask;
 } Batch;
 
@@ -239,7 +240,7 @@ static size_t s_batch_cap;
 // to where the lists line up so far. Polygons not found, or found too far away (a cut), are drawn as they are.
 static uint32_t poly_signature(const Gx3dFrame *f, const GxPolygon *p) {
     uint32_t h = p->count * 0x9e3779b1u ^ p->teximage * 0x85ebca77u ^ p->pltt * 0xc2b2ae3du ^
-                 (p->attr & ~0x001f0000u) * 0x27d4eb2fu;
+                 (p->attr & ~0x001f0000u) * 0x27d4eb2fu ^ p->tag * 0x165667b1u;
     for (int k = 0; k < p->count; k++) {
         const GxVertex *v = &f->vertices[p->first + k];
         h = (h ^ ((uint32_t) (uint16_t) v->s | (uint32_t) (uint16_t) v->t << 16)) * 0x01000193u;
@@ -295,7 +296,7 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
             const GxVertex *a = &prev->vertices[prev->polygons[best].first], *b = &f->vertices[p->first];
             float aw = a->w ? (float) a->w : 1.0f, bw = b->w ? (float) b->w : 1.0f;
             float dx = a->x / aw - b->x / bw, dy = a->y / aw - b->y / bw;
-            if (dx * dx + dy * dy > 0.3f * 0.3f || (a->w > 0) != (b->w > 0)) {
+            if (dx * dx + dy * dy > 0.15f * 0.15f || (a->w > 0) != (b->w > 0)) {
                 s_match[i] = -1;
                 continue;
             }
@@ -307,8 +308,11 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
 
 // `prev`/`pp`: the polygon in the previous list, to draw it at fraction `t` of the way from there (frame
 // interpolation at display rates above the game's 60 Hz); NULL to draw it as it is.
+static float s_target_aspect = 4.0f / 3.0f; // of the render target
+
 static void push_polygon(const Gx3dFrame *f, const GxPolygon *p, Vertex **out, GLuint tex, const Gx3dFrame *prev,
                          const GxPolygon *pp, float t) {
+
     uint32_t alpha = (p->attr >> 16) & 31;
     if (alpha == 0) alpha = 31; // wireframe: drawn filled
     uint32_t mode = (p->attr >> 4) & 3;
@@ -340,6 +344,7 @@ uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const F
                      float wide) {
     int w = (int) (256 * scale * wide + 0.5f), h = 192 * scale;
     float sx = w / 256.0f; // horizontal pixels per DS pixel
+    s_target_aspect = 4.0f / 3.0f * wide;
     if (prev && (t >= 1.0f || prev->vertex_count == 0)) prev = NULL;
     if (prev) match_lists(prev, f);
     ensure_target(w, h);
@@ -377,7 +382,7 @@ uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const F
             bool shadow_mask = shadow && id == 0;
             if (!b || b->tex != tex || b->teximage != (p->teximage & 0x000f0000) || b->size_bits != p->teximage || b->attr != state_attr ||
                 memcmp(b->viewport, p->viewport, 4) != 0 || b->translucent != translucent || b->shadow != shadow ||
-                b->shadow_mask != shadow_mask || b->id != id) {
+                b->shadow_mask != shadow_mask || b->id != id || b->aspect != p->aspect) {
                 b = &s_batches[nb++];
                 b->first = (uint32_t) (out - s_verts);
                 b->count = 0;
@@ -390,6 +395,7 @@ uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const F
                 b->shadow = shadow;
                 b->shadow_mask = shadow_mask;
                 b->id = id;
+                b->aspect = p->aspect;
             }
             Vertex *start = out;
             const GxPolygon *pp = prev && s_match[i] >= 0 ? &prev->polygons[s_match[i]] : NULL;
@@ -434,7 +440,12 @@ uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const F
         if (!b->count) continue;
         int vx = b->viewport[0], vy = b->viewport[1];
         int vw = b->viewport[2] - vx + 1, vh = b->viewport[3] - vy + 1;
-        glViewport((GLint) (vx * sx + 0.5f), vy * scale, (GLsizei) (vw * sx + 0.5f), vh * scale);
+        // A polygon keeps the shape its projection gives it: a view projected for 4:3 on a wider target takes the
+        // centred 4:3 part of it.
+        float xs = (b->aspect > 0 ? b->aspect / 4096.0f : 4.0f / 3.0f) / s_target_aspect;
+        if (xs > 1.0f) xs = 1.0f;
+        float left = (w - w * xs) / 2;
+        glViewport((GLint) (left + vx * sx * xs + 0.5f), vy * scale, (GLsizei) (vw * sx * xs + 0.5f), vh * scale);
         glDepthFunc((b->attr & (1u << 14)) ? GL_EQUAL : GL_LESS);
         if (b->tex) {
             glBindTexture(GL_TEXTURE_2D, b->tex);
