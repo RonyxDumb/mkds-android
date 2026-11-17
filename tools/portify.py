@@ -38,6 +38,10 @@ FIXUPS = [
     # Widescreen: the race and award ceremony cameras take the aspect ratio set by the platform (4:3 by default); the
     # renderer gives each polygon the shape of its own projection (GxPolygon.aspect), so other views stay 4:3.
     ("src/Main/Kart/kart_model_menu.c", r"camera->mAspectRatio = FIXED12_RATIO\(4, 3\);", "camera->mAspectRatio = g_port_aspect;", 1),
+    # Name tags over the karts: placed where the (widened) race projection puts the kart, in the 4:3 coordinates of
+    # their own projection; scaled so that they stay over the kart on the wide screen.
+    ("src/Main/Kart/kart_name_tags.c", r"screenX = \(\(\(s64\) screenX << 19\) \+ 0x800\) >> 12;",
+     "screenX = (s32) (((((s64) screenX << 19) + 0x800) >> 12) * g_port_aspect / 0x1555);", 1),
     ("src/Main/MapObjects/trophy.c", r"frustumRight = MUL_FIXED12_NO_ROUND\(-frustumTop, 0x1555\);",
      "frustumRight = MUL_FIXED12_NO_ROUND(-frustumTop, g_port_aspect);", 1),
     ("libs/NitroSystem/g2d/src/font_glyph_layout.c", r"asm \{ clz leadingZeros, value \}", "leadingZeros = __builtin_clz(value);", 1),

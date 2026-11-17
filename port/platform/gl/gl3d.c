@@ -286,20 +286,9 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
         } else {
             uint32_t slot = sig & ((1u << MATCH_BITS) - 1);
             while (s_match_key[slot] && s_match_key[slot] != sig) slot = (slot + 1) & ((1u << MATCH_BITS) - 1);
-            if (s_match_key[slot]) {
-                // Identical objects (item boxes, karts): the one nearest to where this one is now.
-                const GxVertex *b = &f->vertices[p->first];
-                float best_d = 0;
-                for (int32_t j = s_match_first[slot]; j >= 0; j = s_match_next[j]) {
-                    const GxVertex *a = &prev->vertices[prev->polygons[j].first];
-                    float d = fabsf((float) (a->x - b->x)) + fabsf((float) (a->y - b->y)) +
-                              fabsf((float) (a->w - b->w)) + (float) abs(j - want);
-                    if (best < 0 || d < best_d) {
-                        best = j;
-                        best_d = d;
-                    }
-                }
-            }
+            // Elsewhere only when the signature is unique: with identical objects (wheels, item boxes) any other
+            // choice can pair an object with its twin.
+            if (s_match_key[slot] && s_match_next[s_match_first[slot]] < 0) best = s_match_first[slot];
         }
         if (best >= 0) {
             // Too far from where it was (a camera cut, a teleport): not interpolated. Measured in clip space against
@@ -316,6 +305,18 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
         }
         s_match[i] = best;
     }
+    // A vertex block (one piece of a model) is interpolated whole or not at all, so that its parts never separate.
+    uint32_t start = 0;
+    for (uint32_t i = 0; i <= f->polygon_count; i++) {
+        if (i == f->polygon_count || (i > start && f->polygons[i].tag == 0)) {
+            bool all = true;
+            for (uint32_t k = start; k < i && all; k++) all = s_match[k] >= 0;
+            if (!all) {
+                for (uint32_t k = start; k < i; k++) s_match[k] = -1;
+            }
+            start = i;
+        }
+    }
 }
 
 // `prev`/`pp`: the polygon in the previous list, to draw it at fraction `t` of the way from there (frame
@@ -324,6 +325,13 @@ static float s_target_aspect = 4.0f / 3.0f; // of the render target
 
 static void push_polygon(const Gx3dFrame *f, const GxPolygon *p, Vertex **out, GLuint tex, const Gx3dFrame *prev,
                          const GxPolygon *pp, float t) {
+    // A polygon keeps the shape its projection gives it: one projected for 4:3 drawn over the whole wide screen is
+    // narrowed about the centre (it may lie beyond the 4:3 part: name tags over karts). Partial viewports: below.
+    float xs = 1.0f;
+    if (p->viewport[0] == 0 && p->viewport[2] == 255) {
+        xs = (p->aspect > 0 ? p->aspect / 4096.0f : 4.0f / 3.0f) / s_target_aspect;
+        if (xs > 1.0f) xs = 1.0f;
+    }
 
     uint32_t alpha = (p->attr >> 16) & 31;
     if (alpha == 0) alpha = 31; // wireframe: drawn filled
@@ -340,7 +348,7 @@ static void push_polygon(const Gx3dFrame *f, const GxPolygon *p, Vertex **out, G
             z = o->z + (z - o->z) * t;
             w = o->w + (w - o->w) * t;
         }
-        v[k] = (Vertex) {x / 4096.0f, y / 4096.0f, z / 4096.0f, w / 4096.0f,
+        v[k] = (Vertex) {x * xs / 4096.0f, y / 4096.0f, z / 4096.0f, w / 4096.0f,
                          g->r / 31.0f, g->g / 31.0f, g->b / 31.0f, alpha / 31.0f,
                          g->s, g->t, m};
     }
@@ -454,8 +462,11 @@ uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const F
         int vw = b->viewport[2] - vx + 1, vh = b->viewport[3] - vy + 1;
         // A polygon keeps the shape its projection gives it: a view projected for 4:3 on a wider target takes the
         // centred 4:3 part of it.
-        float xs = (b->aspect > 0 ? b->aspect / 4096.0f : 4.0f / 3.0f) / s_target_aspect;
-        if (xs > 1.0f) xs = 1.0f;
+        float xs = 1.0f;
+        if (!(b->viewport[0] == 0 && b->viewport[2] == 255)) { // a partial viewport: its 4:3 place, centred
+            xs = (b->aspect > 0 ? b->aspect / 4096.0f : 4.0f / 3.0f) / s_target_aspect;
+            if (xs > 1.0f) xs = 1.0f;
+        }
         float left = (w - w * xs) / 2;
         glViewport((GLint) (left + vx * sx * xs + 0.5f), vy * scale, (GLsizei) (vw * sx * xs + 0.5f), vh * scale);
         // Depth "equal" (decals such as the karts' emblems): the DS accepts depths within a small margin; a
@@ -502,14 +513,18 @@ uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const F
             glDisable(GL_STENCIL_TEST);
             continue;
         }
+        glEnable(GL_STENCIL_TEST);
         if (!b->translucent) {
             // Opaque polygons record their ID for the shadows.
-            glEnable(GL_STENCIL_TEST);
-            glStencilMask(0x3f);
+            glStencilMask(0x7f);
             glStencilFunc(GL_ALWAYS, b->id, 0xff);
             glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
         } else {
-            glDisable(GL_STENCIL_TEST);
+            // A translucent pixel is not drawn over a translucent pixel of the same polygon ID (the DS keeps that ID
+            // with bit 6 set); it records its own.
+            glStencilMask(0x7f);
+            glStencilFunc(GL_NOTEQUAL, 0x40 | b->id, 0x7f);
+            glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
         }
         if (b->translucent && blending) {
             glEnable(GL_BLEND);
