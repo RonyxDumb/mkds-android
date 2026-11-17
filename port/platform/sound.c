@@ -109,6 +109,7 @@ typedef struct Channel {
     int priority;
     int user_db;    // track/player volume in 0.1 dB (the last ones, once the track has let go)
     int user_pitch; // track pitch bend and pitch, 1/64 semitone
+    int last_db;    // the volume of the last update, 0.1 dB (the quietest note gives its channel away first)
     int pan, user_pan;
     Lfo lfo;
     int track; // owning track, -1 none
@@ -401,7 +402,7 @@ static Channel *alloc_channel(int type, uint16_t mask, int prio) {
         Channel *c = &s_ch[i];
         if (!c->active) return c;
         if (c->sequenced && (!best || c->priority < best->priority || (c->priority == best->priority &&
-                                                                       c->env_level < best->env_level))) {
+                                                                       c->last_db < best->last_db))) {
             best = c;
         }
     }
@@ -447,6 +448,7 @@ static void note_on(Track *t, int key, int velocity, int length) {
         return;
     }
     memset(c, 0, sizeof(*c));
+    c->last_db = 0; // a new note counts as loud until its first update
     c->type = type;
     if (type == CH_PCM) {
         // PCM: wave index and archive; direct PCM: the wave's address.
@@ -836,6 +838,7 @@ static void update_channel_params(Channel *c) {
     }
     if (db < -723) db = -723;
     if (db > 0) db = 0;
+    c->last_db = db;
     float gain = powf(10.0f, db / 200.0f) * (s_master_volume / 127.0f);
     if (pan < -64) pan = -64;
     if (pan > 63) pan = 63;

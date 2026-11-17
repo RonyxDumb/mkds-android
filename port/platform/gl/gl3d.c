@@ -10,6 +10,7 @@
 #include "gl3d.h"
 
 #include <GLES3/gl3.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -292,11 +293,13 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
             }
         }
         if (best >= 0) {
-            // Too far from where it was (a camera cut, a teleport): not interpolated.
+            // Too far from where it was (a camera cut, a teleport): not interpolated. Measured in clip space against
+            // the depth, which stays meaningful for vertices behind the camera (large ground polygons): skipping
+            // those alone would open gaps along the edges they share with interpolated neighbours.
             const GxVertex *a = &prev->vertices[prev->polygons[best].first], *b = &f->vertices[p->first];
-            float aw = a->w ? (float) a->w : 1.0f, bw = b->w ? (float) b->w : 1.0f;
-            float dx = a->x / aw - b->x / bw, dy = a->y / aw - b->y / bw;
-            if (dx * dx + dy * dy > 0.15f * 0.15f || (a->w > 0) != (b->w > 0)) {
+            float d = fabsf((float) (a->x - b->x)) + fabsf((float) (a->y - b->y)) + fabsf((float) (a->w - b->w));
+            float scale = fmaxf(fabsf((float) a->w), fabsf((float) b->w)) + 4096.0f;
+            if (d > scale) {
                 s_match[i] = -1;
                 continue;
             }
