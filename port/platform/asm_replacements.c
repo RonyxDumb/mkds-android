@@ -10,6 +10,7 @@
 #include "matrix44_concat.h"
 #include "char_canvas_text_draw.h"
 #include "digest_hash_block.h"
+#include "cpu_copy_fill.h"
 #include "Main/Graphics/stem_sets.h"
 #include "Main/Graphics/timed_quad.h"
 #include "Main/Race/race_hud_keyboard_map_object_work.h"

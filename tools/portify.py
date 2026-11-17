@@ -24,6 +24,8 @@ FIXUPS = [
     ("src/Main/MapObjects/shadow_model_alpha.c", r"DrawShadowModelIfDrawFlag\(model\);", "DrawShadowModelIfDrawFlag(model, 0, 0);", 1),
     ("src/Main/MapObjects/shadow_model_alpha.c", r"DrawShadowModelIfDrawFlag\(\);", "DrawShadowModelIfDrawFlag(model, 0, 0);", 1),
     ("src/Main/MapObjects/send_obj_shadow.c", r"DrawShadowModelIfDrawFlag\(gJgShadow\);", "DrawShadowModelIfDrawFlag(gJgShadow, 0, 0);", 1),
+    # The game's entry point; `main` is the host program's.
+    ("src/Main/System/main.c", r"^void main\(void\) \{", "void GameMain(void) {", 1),
     # VIEWPORT geometry command written by address.
     ("src/Main/Kart/kart_model_menu.c", r"\*\(u32 \*\) 0x4000580 = 0xbfff0000;", "PORT_IO_WRITE(reg_G3_VIEWPORT, 0xbfff0000);", 1),
     ("libs/NitroSystem/g2d/src/font_glyph_layout.c", r"asm \{ clz leadingZeros, value \}", "leadingZeros = __builtin_clz(value);", 1),
@@ -193,7 +195,7 @@ def main():
             continue
         text = src.read_text(encoding="utf-8", errors="surrogateescape")
         for rx, rep, n in fixups_by_file.pop(rel, []):
-            text, count = re.subn(rx, rep, text)
+            text, count = re.subn(rx, rep, text, flags=re.M)
             if count != n:
                 sys.exit(f"portify: fixup {rx!r} matched {count} times in {rel}, expected {n}")
         text, names = strip_asm(text)
@@ -202,6 +204,10 @@ def main():
         stripped += [f"{rel}: {n}" for n in names]
         ov = overlays.get(rel)
         header = f'#line 1 "{rel}"\n'
+        if not ov:
+            # Constant data is ordinary RAM on the DS and the game patches some of it (pointers into archives): the
+            # platform layer makes these sections writable (port/platform/overlay.c).
+            header = '#pragma clang section rodata="game_rodata"\n' + header
         if ov:
             used_overlays.add(ov)
             header = (f'#pragma clang section text="{ov}_text" rodata="{ov}_rodata" data="{ov}_data" bss="{ov}_bss"\n') + header
@@ -216,7 +222,10 @@ def main():
     shadowed = {p.relative_to(compat).as_posix() for p in compat.rglob("*.h")}
     headers = [(h, h.relative_to(decomp / "include").as_posix()) for h in sorted((decomp / "include").rglob("*.h"))]
     for d in sorted(decomp.glob("libs/**/include")):
-        headers += [(h, h.relative_to(d).as_posix()) for h in sorted(d.rglob("*.h"))]
+        # The C library's headers (stdio.h, string.h ...) go to their own folder, used only for the game's code, so
+        # that the platform layer gets the host's.
+        prefix = "../msl_include/" if d.parts[-2] == "msl" else ""
+        headers += [(h, prefix + h.relative_to(d).as_posix()) for h in sorted(d.rglob("*.h"))]
     for h, rel in headers:
         text = h.read_text(encoding="utf-8", errors="surrogateescape")
         if rel == "types.h":

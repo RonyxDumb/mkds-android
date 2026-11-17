@@ -1,0 +1,125 @@
+// Headless test runner (32-bit Linux): runs the game as fast as possible, feeds scripted input and writes frames as
+// images. Usage: mkds <rom.nds> [--frames N] [--dump-every K] [--out DIR] [--press FRAME:BUTTONS[:LEN]]...
+// BUTTONS is a string of A B s(elect) S(tart) R L u d l r X Y, or "t<x>,<y>" for a touch.
+#include "port.h"
+#include "frame.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+
+void GameMain(void); // the game's entry point (src/Main/System/main.c, renamed by tools/portify.py)
+void port_overlays_init(void);
+void host_write_frame(const FrameSnapshot *f, const char *path); // host/render.c
+
+typedef struct Press {
+    uint64_t frame, length;
+    uint16_t buttons;
+    bool touch;
+    uint16_t x, y;
+} Press;
+
+static Press s_presses[256];
+static int s_press_count;
+static uint64_t s_frames = 600, s_dump_every = 60;
+static const char *s_out = "frames";
+
+static void frame_hook(const FrameSnapshot *f) {
+    uint64_t n = g_frame_count;
+    PortInput in = {0};
+    for (int i = 0; i < s_press_count; i++) {
+        if (n >= s_presses[i].frame && n < s_presses[i].frame + s_presses[i].length) {
+            in.buttons |= s_presses[i].buttons;
+            if (s_presses[i].touch) {
+                in.touching = true;
+                in.touch_x = s_presses[i].x;
+                in.touch_y = s_presses[i].y;
+            }
+        }
+    }
+    port_input_set(&in);
+    if (s_dump_every && n % s_dump_every == 0) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/frame_%05llu.png", s_out, (unsigned long long) n);
+        host_write_frame(f, path);
+        port_log("frame %llu: DISPCNT A %08x B %08x, 3D %u polygons, POWCNT %04x", (unsigned long long) n,
+                 *(uint32_t *) f->io, *(uint32_t *) (f->io + 0x1000), f->frame3d.polygon_count,
+                 *(uint16_t *) (f->io + 0x304));
+    }
+    if (n >= s_frames) {
+        port_log("done after %llu frames", (unsigned long long) n);
+        port_save_flush();
+        exit(0);
+    }
+}
+
+static void parse_press(const char *spec) {
+    Press p = {0};
+    char buttons[64] = "";
+    unsigned long long frame = 0, length = 4;
+    if (sscanf(spec, "%llu:%63[^:]:%llu", &frame, buttons, &length) < 2) {
+        port_fatal("bad --press %s", spec);
+    }
+    p.frame = frame;
+    p.length = length;
+    if (buttons[0] == 't') {
+        unsigned x, y;
+        sscanf(buttons + 1, "%u,%u", &x, &y);
+        p.touch = true;
+        p.x = (uint16_t) x;
+        p.y = (uint16_t) y;
+    } else {
+        for (const char *c = buttons; *c; c++) {
+            switch (*c) {
+            case 'A': p.buttons |= PAD_A; break;
+            case 'B': p.buttons |= PAD_B; break;
+            case 's': p.buttons |= PAD_SELECT; break;
+            case 'S': p.buttons |= PAD_START; break;
+            case 'R': p.buttons |= PAD_R; break;
+            case 'L': p.buttons |= PAD_L; break;
+            case 'u': p.buttons |= PAD_UP; break;
+            case 'd': p.buttons |= PAD_DOWN; break;
+            case 'l': p.buttons |= PAD_LEFT; break;
+            case 'r': p.buttons |= PAD_RIGHT; break;
+            case 'X': p.buttons |= PAD_X; break;
+            case 'Y': p.buttons |= PAD_Y; break;
+            }
+        }
+    }
+    if (s_press_count < 256) {
+        s_presses[s_press_count++] = p;
+    }
+}
+
+int main(int argc, char **argv) {
+    if (argc < 2) {
+        fprintf(stderr, "usage: %s rom.nds [--frames N] [--dump-every K] [--out DIR] [--realtime] [--press F:BTN[:LEN]]\n",
+                argv[0]);
+        return 1;
+    }
+    g_vblank_rate_mhz = 0;
+    const char *save = "mkds.sav";
+    for (int i = 2; i < argc; i++) {
+        if (!strcmp(argv[i], "--frames") && i + 1 < argc) s_frames = strtoull(argv[++i], NULL, 0);
+        else if (!strcmp(argv[i], "--dump-every") && i + 1 < argc) s_dump_every = strtoull(argv[++i], NULL, 0);
+        else if (!strcmp(argv[i], "--out") && i + 1 < argc) s_out = argv[++i];
+        else if (!strcmp(argv[i], "--save") && i + 1 < argc) save = argv[++i];
+        else if (!strcmp(argv[i], "--press") && i + 1 < argc) parse_press(argv[++i]);
+        else if (!strcmp(argv[i], "--realtime")) g_vblank_rate_mhz = 59826;
+    }
+    mkdir(s_out, 0755);
+    if (!port_mem_init()) {
+        port_fatal("cannot reserve the DS address space");
+    }
+    if (!port_rom_open(argv[1])) {
+        return 1;
+    }
+    port_save_set_path(save);
+    port_overlays_init();
+    gx3d_init();
+    g_frame_hook = frame_hook;
+    port_os_run(GameMain);
+    port_log("main returned");
+    return 0;
+}

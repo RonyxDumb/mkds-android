@@ -157,9 +157,76 @@ void *MIC_GetLastSamplingAddress(void) { return (void *) (uintptr_t) *(u32 *) 0x
 PXIFifoCallback FifoRecvCallbackTable[32];
 void PXI_SetFifoRecvCallback(s32 fifotag, PXIFifoCallback callback) { FifoRecvCallbackTable[fifotag & 31] = callback; }
 s32 PXI_IsCallbackReady(s32 fifotag, s32 proc) { (void) fifotag, (void) proc; return 1; }
+// Firmware flash (tag 4): the commands the DWC library sends to read and write its Wi-Fi settings. Packets are
+// words with an index in bits 16..23, the data in bits 0..15, a start flag (bit 25, with the SPI command in bits 8..15)
+// and an end flag (bit 24). The firmware is blank apart from the header word that locates the user settings.
+#define FIRMWARE_SIZE 0x40000
+static u8 s_firmware[FIRMWARE_SIZE];
+static bool s_firmware_ready, s_firmware_wren;
+static u32 s_packet[8];
+static int s_packet_len;
+
+static void firmware_init(void) {
+    if (s_firmware_ready) return;
+    memset(s_firmware, 0xff, FIRMWARE_SIZE);
+    s_firmware[0x20] = (u8) (0x3fe00 / 8);
+    s_firmware[0x21] = (u8) ((0x3fe00 / 8) >> 8);
+    s_firmware_ready = true;
+}
+
+static void firmware_packet(void) {
+    u32 cmd = (s_packet[0] >> 8) & 0xff;
+    u32 hi = s_packet[0] & 0xff;
+    u32 result = 0;
+    switch (cmd) {
+    case 0x23: { // read: addr, ?, size, buffer
+        u32 addr = (hi << 16) | (s_packet[1] & 0xffff), size = s_packet[3] & 0xffff;
+        u32 buf = (s_packet[4] & 0xffff) << 16 | (s_packet[5] & 0xffff);
+        for (u32 i = 0; i < size; i++) ((u8 *) (uintptr_t) buf)[i] = s_firmware[(addr + i) % FIRMWARE_SIZE];
+        break;
+    }
+    case 0x25: { // page write: addr, size, buffer
+        u32 addr = (hi << 16) | (s_packet[1] & 0xffff), size = s_packet[2] & 0xffff;
+        u32 buf = (s_packet[3] & 0xffff) << 16 | (s_packet[4] & 0xffff);
+        for (u32 i = 0; i < size; i++) s_firmware[(addr + i) % FIRMWARE_SIZE] = ((u8 *) (uintptr_t) buf)[i];
+        s_firmware_wren = false;
+        break;
+    }
+    case 0x22: { // status register into a byte of memory
+        u32 addr = hi << 24 | (s_packet[1] & 0xffff) << 8 | ((s_packet[2] & 0xff00) >> 8);
+        *(u8 *) (uintptr_t) addr = s_firmware_wren ? 2 : 0;
+        break;
+    }
+    case 0x20: s_firmware_wren = true; break;     // write enable
+    case 0x21: s_firmware_wren = false; break;    // write disable
+    default: break;
+    }
+    if (FifoRecvCallbackTable[4]) {
+        FifoRecvCallbackTable[4](4, result, 0);
+    }
+}
+
+static void firmware_word(u32 data) {
+    firmware_init();
+    if (data & 0x2000000) {
+        s_packet_len = 0;
+    }
+    if (s_packet_len < 8) {
+        s_packet[s_packet_len++] = data;
+    }
+    if (data & 0x1000000) {
+        firmware_packet();
+        s_packet_len = 0;
+    }
+}
+
 void port_snd_pxi_word(u32 data); // sound.c
 s32 PXI_SendWordByFifo(s32 fifotag, u32 data, s32 err) {
     (void) err;
+    if (fifotag == 4) {
+        firmware_word(data);
+        return 0;
+    }
     if (fifotag == 7) { // sound
         port_snd_pxi_word(data);
         return 0;

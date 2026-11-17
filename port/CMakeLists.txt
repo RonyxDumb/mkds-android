@@ -32,6 +32,7 @@ list(SORT DECOMP_INCLUDE_DIRS)
 add_library(game STATIC ${GAME_SOURCES})
 target_include_directories(game PRIVATE
     ${GEN}/include
+    ${GEN}/msl_include
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/include
     )
 target_compile_definitions(game PRIVATE version_EUR)
@@ -63,7 +64,14 @@ if (ANDROID)
     list(APPEND PLATFORM_SOURCES ${ANDROID_SOURCES})
 endif()
 
-add_library(mkds SHARED ${PLATFORM_SOURCES})
+if (ANDROID)
+    add_library(mkds SHARED ${PLATFORM_SOURCES})
+else()
+    # Headless test build for a 32-bit Linux host (tools/run_host.sh).
+    file(GLOB HOST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/host/*.c)
+    add_executable(mkds ${PLATFORM_SOURCES} ${HOST_SOURCES})
+    target_link_libraries(mkds PRIVATE pthread m)
+endif()
 target_include_directories(mkds PRIVATE
     ${GEN}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/include
@@ -77,4 +85,7 @@ target_link_libraries(mkds PRIVATE -Wl,--whole-archive game -Wl,--no-whole-archi
 if (ANDROID)
     target_link_libraries(mkds PRIVATE android log EGL GLESv3 aaudio m)
 endif()
-target_link_options(mkds PRIVATE -Wl,--no-undefined -Wl,--error-limit=0 -Wl,-z,max-page-size=16384)
+target_link_options(mkds PRIVATE -Wl,--no-undefined -Wl,--error-limit=0)
+if (ANDROID)
+    target_link_options(mkds PRIVATE -Wl,-z,max-page-size=16384)
+endif()

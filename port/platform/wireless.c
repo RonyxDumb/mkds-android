@@ -64,7 +64,7 @@ u16 WM_GetDispersionBeaconPeriod(void) { return 0;}
 u16 WM_GetDispersionScanPeriod(void) { return 0;}
 u16 WM_GetLinkLevel(void) { return 0;}
 u16 WM_GetNextTgid(void) { return 0;}
-WMOtherElements WM_GetOtherElements(const u16 *bssDesc) { (void) bssDesc; return 0;}
+WMOtherElements WM_GetOtherElements(const u16 *bssDesc) { (void) bssDesc; WMOtherElements e = {0}; return e;}
 u8 *WM_GetSharedDataAddress(WMDataSharingInfo *dsInfo, WMDataSet *receiveData, u32 aid) { (void) dsInfo; (void) receiveData; (void) aid; return NULL;}
 s32 WM_Init(void *wmSysBuf, u16 dmaNo) { (void) wmSysBuf; (void) dmaNo; return WM_ERRCODE_WM_DISABLE;}
 s32 WM_Initialize(void *wmSysBuf, WirelessMessageCallback callback, u16 dmaNo) { (void) wmSysBuf; (void) callback; (void) dmaNo; return WM_ERRCODE_WM_DISABLE;}

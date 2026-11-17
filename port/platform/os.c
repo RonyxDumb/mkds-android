@@ -24,11 +24,13 @@
 #include "registers.h"
 #include "arena_cache_init.h"
 #include "interrupt_control.h"
+#include "interrupt_table_init.h"
 #include "irq_wait_handler.h"
 #include "lock_word_and_bus_ownership.h"
 #include "reset_interrupts_halt.h"
 #include "system_state_globals.h"
 #include "thread_scheduler.h"
+#include "Main/Net/block_transfer_and_thread_globals.h"
 #include "thread_sync_and_console_info.h"
 #include "tick_counter.h"
 #include "alarm_timer.h"
@@ -422,7 +424,7 @@ static void os_poll(void) {
 void port_os_poll(void) { os_poll(); }
 
 // ------------------------------------------------------------------------------------------------ scheduler
-extern u32 OSi_IsThreadInitialized;
+
 extern u32 OSi_RescheduleCount;
 extern OSThread **OSi_CurrentThreadPtr;
 extern OSThread OSi_IdleThread;
@@ -728,3 +730,7 @@ s32 OS_LockCartridge(u16 lockID) { (void) lockID; return 0; }
 s32 OS_UnlockCartridge(u16 lockID) { (void) lockID; return 0; }
 s32 OS_UnLockCartridge(u16 lockID) { (void) lockID; return 0; }
 s32 OS_TryLockCartridge(u16 lockID) { (void) lockID; return 0; }
+u16 OS_ReadOwnerOfLockWord(OSLockWord *lockp) {
+    (void) lockp;
+    return 0;
+}
