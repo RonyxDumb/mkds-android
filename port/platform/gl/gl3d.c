@@ -239,8 +239,8 @@ static size_t s_batch_cap;
 // Frame interpolation pairs the models of two lists. A model piece is a vertex block (BEGIN_VTXS): its polygons,
 // culled ones included (GxPolygon.hidden), are the same every frame, so a block is found in the previous list by a
 // signature of its structure (polygon shapes, texture formats and sizes, attributes); among blocks with the same
-// structure (wheels, item boxes, trees) the one at the same place in the list, or a much nearer one (see match_lists).
-// A block not found, or found too far away (a cut), is drawn as it is, whole: the parts of a model never separate.
+// structure (wheels, item boxes, trees), by where it should have been (see match_lists). A block not found, or found
+// too far away (a cut), is drawn as it is, whole: the parts of a model never separate.
 typedef struct Block {
     uint32_t first, count, sig;
     float cx, cy, cw; // centre in clip space (sums over the vertices / their number)
@@ -274,7 +274,8 @@ static size_t find_blocks(const Gx3dFrame *f, int which) {
             // palette changes) must not make a piece unrecognisable from one frame to the next.
             h = (h ^ p->count) * 0x01000193u;
             h = (h ^ (p->teximage & 0x3ff00000u)) * 0x01000193u; // format, size, repeat, flip, colour 0
-            h = (h ^ (p->attr & ~0x001f0000u)) * 0x01000193u;
+            // Without alpha and polygon ID: the game gives item boxes a new polygon ID every frame.
+            h = (h ^ (p->attr & ~0x3f1f0000u)) * 0x01000193u;
             for (int v = 0; v < p->count; v++) {
                 const GxVertex *g = &f->vertices[p->first + v];
                 sx += g->x;
@@ -316,79 +317,135 @@ static float block_distance(const Block *a, const Block *b) {
     return fabsf(a->cx - b->cx) + fabsf(a->cy - b->cy) + fabsf(a->cw - b->cw);
 }
 
-// Pairs the blocks of the two lists, in list order. A model draws its pieces in the same order every frame, so the
-// block at the place where the lists line up so far is the first choice, even when another identical piece is a
-// little nearer: an item box is made of identical pieces close together, which "the nearest one" swaps as soon as the
-// camera moves faster than they are apart. Another identical block is taken only when it is much nearer (the expected
-// one belongs to an object that has gone: an item box taken, a tree out of view), and if no other current piece is
-// much nearer to it.
+// Pairs the blocks of the two lists.
+// - A structure found once in each list (most of the scenery, each kart) is its own pair: an anchor, whose move from
+//   one list to the other is known.
+// - Among identical blocks (item boxes, trees, wheels, posts), where each one was in the previous list is predicted
+//   from the move of the nearest anchor (the camera's motion at that place), and the pairs are taken by distance to
+//   the prediction, nearest first. Neither the order of the list (the game sorts item boxes by distance, which swaps
+//   them) nor the plain nearest block (the camera moves farther than identical pieces are apart) can tell them apart.
+typedef struct Pair {
+    float d;
+    uint32_t c, p;
+} Pair;
+static Pair *s_pairs;
+static size_t s_pair_cap;
+static int cmp_pair(const void *a, const void *b) {
+    float x = ((const Pair *) a)->d, y = ((const Pair *) b)->d;
+    return x < y ? -1 : x > y;
+}
+
+typedef struct Anchor {
+    float cx, cy, cw, dx, dy, dw;
+} Anchor;
+static Anchor *s_anchors;
+static size_t s_anchor_cap;
+
+static void pair_blocks(const Block *pb, const Block *cb, uint32_t c, uint32_t p) {
+    const Block *b = &cb[c], *a = &pb[p];
+    for (uint32_t k = 0; k < b->count; k++) s_match[b->first + k] = (int32_t) (a->first + k);
+}
+
 static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
     size_t np = find_blocks(prev, 0), nc = find_blocks(f, 1);
     if (f->polygon_count + 1 > s_match_cap) {
         s_match_cap = (f->polygon_count + 1) * 2;
         s_match = realloc(s_match, s_match_cap * sizeof(*s_match));
     }
-    if (np + 1 > s_used_cap) {
-        s_used_cap = (np + 1) * 2;
+    if (np + nc + 1 > s_used_cap) {
+        s_used_cap = (np + nc + 1) * 2;
         s_used = realloc(s_used, s_used_cap);
     }
-    memset(s_used, 0, np);
+    if (nc + 1 > s_anchor_cap) {
+        s_anchor_cap = (nc + 1) * 2;
+        s_anchors = realloc(s_anchors, s_anchor_cap * sizeof(Anchor));
+    }
     for (uint32_t i = 0; i < f->polygon_count; i++) s_match[i] = -1;
     const Block *pb = s_blocks[0], *cb = s_blocks[1];
     const uint32_t *po = sorted_by_sig(pb, np, 0), *co = sorted_by_sig(cb, nc, 1);
-    long offset = 0; // where the lists line up so far
-    for (size_t c = 0; c < nc; c++) {
-        const Block *b = &cb[c];
-        // The previous blocks with this structure: po[lo..hi).
-        size_t lo = 0, hi = np;
-        while (lo < hi) {
-            size_t mid = (lo + hi) / 2;
-            if (pb[po[mid]].sig < b->sig) lo = mid + 1;
-            else hi = mid;
+
+    // Anchors: structures found once in each list.
+    size_t na = 0;
+    for (size_t pi = 0, ci = 0; pi < np && ci < nc;) {
+        uint32_t ps = pb[po[pi]].sig, cs = cb[co[ci]].sig;
+        if (ps != cs) {
+            if (ps < cs) pi++;
+            else ci++;
+            continue;
         }
-        hi = lo;
-        while (hi < np && pb[po[hi]].sig == b->sig) hi++;
-        if (lo == hi) continue;
-        long want = (long) c + offset, near = -1;
-        float want_d = -1, near_d = 0;
-        if (want >= 0 && want < (long) np && !s_used[want] && pb[want].sig == b->sig) want_d = block_distance(&pb[want], b);
-        for (size_t k = lo; k < hi; k++) {
-            if (s_used[po[k]]) continue;
-            float d = block_distance(&pb[po[k]], b);
-            if (near < 0 || d < near_d) {
-                near = (long) po[k];
-                near_d = d;
+        size_t pe = pi, ce = ci;
+        while (pe < np && pb[po[pe]].sig == ps) pe++;
+        while (ce < nc && cb[co[ce]].sig == cs) ce++;
+        if (pe - pi == 1 && ce - ci == 1) {
+            const Block *a = &pb[po[pi]], *b = &cb[co[ci]];
+            float scale = fmaxf(fabsf(a->cw), fabsf(b->cw)) + 4096.0f;
+            if (block_distance(a, b) <= scale) {
+                pair_blocks(pb, cb, co[ci], po[pi]);
+                s_anchors[na++] = (Anchor) {b->cx, b->cy, b->cw, b->cx - a->cx, b->cy - a->cy, b->cw - a->cw};
             }
         }
-        long best = -1;
-        float best_d = 0;
-        if (want_d >= 0 && (want_d <= near_d * 3.0f + 64.0f || near == want)) {
-            best = want;
-            best_d = want_d;
-        } else if (near >= 0) {
-            // Mutual: no other current piece with this structure is clearly nearer to it.
-            bool mutual = true;
-            size_t clo = 0, chi = nc;
-            while (clo < chi) {
-                size_t mid = (clo + chi) / 2;
-                if (cb[co[mid]].sig < b->sig) clo = mid + 1;
-                else chi = mid;
+        pi = pe;
+        ci = ce;
+    }
+
+    // Identical blocks.
+    uint8_t *used_p = s_used, *used_c = s_used + np;
+    for (size_t pi = 0, ci = 0; pi < np && ci < nc;) {
+        uint32_t ps = pb[po[pi]].sig, cs = cb[co[ci]].sig;
+        if (ps != cs) {
+            if (ps < cs) pi++;
+            else ci++;
+            continue;
+        }
+        size_t pe = pi, ce = ci;
+        while (pe < np && pb[po[pe]].sig == ps) pe++;
+        while (ce < nc && cb[co[ce]].sig == cs) ce++;
+        if (pe - pi == 1 && ce - ci == 1) {
+            pi = pe;
+            ci = ce;
+            continue;
+        }
+        size_t n = (pe - pi) * (ce - ci);
+        if (n > s_pair_cap) {
+            s_pair_cap = n * 2;
+            s_pairs = realloc(s_pairs, s_pair_cap * sizeof(Pair));
+        }
+        size_t k = 0;
+        for (size_t c = ci; c < ce; c++) {
+            const Block *b = &cb[co[c]];
+            // Where it was: moved back by the motion of the nearest anchor.
+            float px = b->cx, py = b->cy, pw = b->cw, best = -1;
+            for (size_t a = 0; a < na; a++) {
+                const Anchor *an = &s_anchors[a];
+                float d = fabsf(an->cx - b->cx) + fabsf(an->cy - b->cy) + fabsf(an->cw - b->cw);
+                if (best < 0 || d < best) {
+                    best = d;
+                    px = b->cx - an->dx;
+                    py = b->cy - an->dy;
+                    pw = b->cw - an->dw;
+                }
             }
-            for (size_t o = clo; o < nc && cb[co[o]].sig == b->sig && mutual; o++) {
-                if (co[o] != c && block_distance(&pb[near], &cb[co[o]]) < near_d * 0.6f) mutual = false;
-            }
-            if (mutual) {
-                best = near;
-                best_d = near_d;
+            used_c[c - ci] = 0;
+            for (size_t p = pi; p < pe; p++) {
+                const Block *a = &pb[po[p]];
+                s_pairs[k++] = (Pair) {fabsf(a->cx - px) + fabsf(a->cy - py) + fabsf(a->cw - pw), (uint32_t) c,
+                                       (uint32_t) p};
             }
         }
-        if (best < 0) continue;
-        // A cut or a jump: further than the depth of the piece (clip space works behind the camera too).
-        float scale = fmaxf(fabsf(pb[best].cw), fabsf(b->cw)) + 4096.0f;
-        if (best_d > scale) continue;
-        s_used[best] = 1;
-        offset = best - (long) c;
-        for (uint32_t k = 0; k < b->count; k++) s_match[b->first + k] = (int32_t) (pb[best].first + k);
+        for (size_t p = pi; p < pe; p++) used_p[p] = 0;
+        qsort(s_pairs, k, sizeof(Pair), cmp_pair);
+        for (size_t i = 0; i < k; i++) {
+            const Pair *q = &s_pairs[i];
+            if (used_c[q->c - ci] || used_p[q->p]) continue;
+            const Block *a = &pb[po[q->p]], *b = &cb[co[q->c]];
+            // A cut, or a piece that came or went: too far from where it should have been.
+            if (q->d > fmaxf(fabsf(a->cw), fabsf(b->cw)) * 0.25f + 2048.0f) continue;
+            used_c[q->c - ci] = 1;
+            used_p[q->p] = 1;
+            pair_blocks(pb, cb, co[q->c], po[q->p]);
+        }
+        pi = pe;
+        ci = ce;
     }
 }
 
