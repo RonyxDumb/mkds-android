@@ -239,8 +239,8 @@ static size_t s_batch_cap;
 // Frame interpolation pairs the models of two lists. A model piece is a vertex block (BEGIN_VTXS): its polygons,
 // culled ones included (GxPolygon.hidden), are the same every frame, so a block is found in the previous list by a
 // signature of its structure (polygon shapes, texture formats and sizes, attributes); among blocks with the same
-// structure (wheels, item boxes, trees) the one nearest to where this one is now, each used once. A block not found, or found too far
-// away (a cut), is drawn as it is, whole: the parts of a model never separate.
+// structure (wheels, item boxes, trees) the one at the same place in the list, or a much nearer one (see match_lists).
+// A block not found, or found too far away (a cut), is drawn as it is, whole: the parts of a model never separate.
 typedef struct Block {
     uint32_t first, count, sig;
     float cx, cy, cw; // centre in clip space (sums over the vertices / their number)
@@ -292,6 +292,36 @@ static size_t find_blocks(const Gx3dFrame *f, int which) {
     return n;
 }
 
+static const Block *s_sort_blocks;
+static int cmp_block_sig(const void *a, const void *b) {
+    uint32_t x = s_sort_blocks[*(const uint32_t *) a].sig, y = s_sort_blocks[*(const uint32_t *) b].sig;
+    return x < y ? -1 : x > y;
+}
+
+static uint32_t *s_order[2];
+static size_t s_order_cap[2];
+
+static uint32_t *sorted_by_sig(const Block *blocks, size_t n, int which) {
+    if (n + 1 > s_order_cap[which]) {
+        s_order_cap[which] = (n + 1) * 2;
+        s_order[which] = realloc(s_order[which], s_order_cap[which] * sizeof(uint32_t));
+    }
+    for (size_t i = 0; i < n; i++) s_order[which][i] = (uint32_t) i;
+    s_sort_blocks = blocks;
+    qsort(s_order[which], n, sizeof(uint32_t), cmp_block_sig);
+    return s_order[which];
+}
+
+static float block_distance(const Block *a, const Block *b) {
+    return fabsf(a->cx - b->cx) + fabsf(a->cy - b->cy) + fabsf(a->cw - b->cw);
+}
+
+// Pairs the blocks of the two lists, in list order. A model draws its pieces in the same order every frame, so the
+// block at the place where the lists line up so far is the first choice, even when another identical piece is a
+// little nearer: an item box is made of identical pieces close together, which "the nearest one" swaps as soon as the
+// camera moves faster than they are apart. Another identical block is taken only when it is much nearer (the expected
+// one belongs to an object that has gone: an item box taken, a tree out of view), and if no other current piece is
+// much nearer to it.
 static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
     size_t np = find_blocks(prev, 0), nc = find_blocks(f, 1);
     if (f->polygon_count + 1 > s_match_cap) {
@@ -305,22 +335,51 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
     memset(s_used, 0, np);
     for (uint32_t i = 0; i < f->polygon_count; i++) s_match[i] = -1;
     const Block *pb = s_blocks[0], *cb = s_blocks[1];
+    const uint32_t *po = sorted_by_sig(pb, np, 0), *co = sorted_by_sig(cb, nc, 1);
     long offset = 0; // where the lists line up so far
     for (size_t c = 0; c < nc; c++) {
         const Block *b = &cb[c];
-        long want = (long) c + offset, best = -1;
-        float best_d = 0;
-        // Candidates: the expected place first, then any identical block (nearest, not taken yet).
-        if (want >= 0 && want < (long) np && !s_used[want] && pb[want].sig == b->sig) {
-            best = want;
-            best_d = fabsf(pb[want].cx - b->cx) + fabsf(pb[want].cy - b->cy) + fabsf(pb[want].cw - b->cw);
+        // The previous blocks with this structure: po[lo..hi).
+        size_t lo = 0, hi = np;
+        while (lo < hi) {
+            size_t mid = (lo + hi) / 2;
+            if (pb[po[mid]].sig < b->sig) lo = mid + 1;
+            else hi = mid;
         }
-        for (size_t k = 0; k < np; k++) {
-            if (s_used[k] || pb[k].sig != b->sig || (long) k == want) continue;
-            float d = fabsf(pb[k].cx - b->cx) + fabsf(pb[k].cy - b->cy) + fabsf(pb[k].cw - b->cw);
-            if (best < 0 || d < best_d) {
-                best = (long) k;
-                best_d = d;
+        hi = lo;
+        while (hi < np && pb[po[hi]].sig == b->sig) hi++;
+        if (lo == hi) continue;
+        long want = (long) c + offset, near = -1;
+        float want_d = -1, near_d = 0;
+        if (want >= 0 && want < (long) np && !s_used[want] && pb[want].sig == b->sig) want_d = block_distance(&pb[want], b);
+        for (size_t k = lo; k < hi; k++) {
+            if (s_used[po[k]]) continue;
+            float d = block_distance(&pb[po[k]], b);
+            if (near < 0 || d < near_d) {
+                near = (long) po[k];
+                near_d = d;
+            }
+        }
+        long best = -1;
+        float best_d = 0;
+        if (want_d >= 0 && (want_d <= near_d * 3.0f + 64.0f || near == want)) {
+            best = want;
+            best_d = want_d;
+        } else if (near >= 0) {
+            // Mutual: no other current piece with this structure is clearly nearer to it.
+            bool mutual = true;
+            size_t clo = 0, chi = nc;
+            while (clo < chi) {
+                size_t mid = (clo + chi) / 2;
+                if (cb[co[mid]].sig < b->sig) clo = mid + 1;
+                else chi = mid;
+            }
+            for (size_t o = clo; o < nc && cb[co[o]].sig == b->sig && mutual; o++) {
+                if (co[o] != c && block_distance(&pb[near], &cb[co[o]]) < near_d * 0.6f) mutual = false;
+            }
+            if (mutual) {
+                best = near;
+                best_d = near_d;
             }
         }
         if (best < 0) continue;

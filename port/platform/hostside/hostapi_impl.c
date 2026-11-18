@@ -298,12 +298,70 @@ static void send_to(uint32_t ip, uint16_t port, const void *data, uint32_t size)
     libc_net.sendto(s_sock, data, size, 0, (struct sockaddr *) &a, sizeof(a));
 }
 
+// Tests on one computer: MKDS_NET_SIM="delay_ms,jitter_ms,loss_percent" delays, shuffles and drops the datagrams
+// sent to other stations, like a busy Wi-Fi network.
+#ifndef __ANDROID__
+typedef struct SimPacket {
+    uint64_t due;
+    uint32_t ip, port, size;
+    uint8_t data[1600];
+} SimPacket;
+static SimPacket s_sim[512];
+static int s_sim_delay = -1, s_sim_jitter, s_sim_loss;
+static uint32_t s_sim_rand = 12345;
+
+static uint32_t sim_rand(void) {
+    s_sim_rand = s_sim_rand * 1103515245u + 12345u;
+    return s_sim_rand >> 8;
+}
+
+static void sim_flush(void) {
+    uint64_t now = hapi_now_ns();
+    for (int i = 0; i < 512; i++) {
+        if (s_sim[i].size && s_sim[i].due <= now) {
+            send_to(s_sim[i].ip, (uint16_t) s_sim[i].port, s_sim[i].data, s_sim[i].size);
+            s_sim[i].size = 0;
+        }
+    }
+}
+
+static bool sim_send(uint32_t ip, uint32_t port, const void *data, uint32_t size) {
+    if (s_sim_delay < 0) {
+        const char *e = getenv("MKDS_NET_SIM");
+        s_sim_delay = 0;
+        if (e) sscanf(e, "%d,%d,%d", &s_sim_delay, &s_sim_jitter, &s_sim_loss);
+        s_sim_rand ^= (uint32_t) getpid();
+    }
+    if (!s_sim_delay && !s_sim_jitter && !s_sim_loss) return false;
+    if (s_sim_loss && (int) (sim_rand() % 100) < s_sim_loss) return true;
+    for (int i = 0; i < 512; i++) {
+        if (!s_sim[i].size && size <= sizeof(s_sim[i].data)) {
+            uint64_t ms = (uint64_t) s_sim_delay * 1000 + (s_sim_jitter ? sim_rand() % ((uint32_t) s_sim_jitter * 1000) : 0);
+            s_sim[i].due = hapi_now_ns() + ms * 1000;
+            s_sim[i].ip = ip;
+            s_sim[i].port = port;
+            s_sim[i].size = size;
+            memcpy(s_sim[i].data, data, size);
+            return true;
+        }
+    }
+    return false;
+}
+#else
+static void sim_flush(void) {}
+static bool sim_send(uint32_t ip, uint32_t port, const void *data, uint32_t size) {
+    (void) ip, (void) port, (void) data, (void) size;
+    return false;
+}
+#endif
+
 void hapi_net_send(const HostNetAddr *to, const void *data, uint32_t size) {
     to = GUEST_PTR(to);
     data = GUEST_PTR(data);
     if (s_sock < 0) return;
+    sim_flush();
     if (to) {
-        send_to(to->ip, (uint16_t) to->port, data, size);
+        if (!sim_send(to->ip, to->port, data, size)) send_to(to->ip, (uint16_t) to->port, data, size);
         return;
     }
     // Broadcast on every interface (a phone sharing its connection as a hotspot has no default route into it), and
@@ -325,6 +383,7 @@ void hapi_net_send(const HostNetAddr *to, const void *data, uint32_t size) {
 int32_t hapi_net_recv(void *data, uint32_t capacity, HostNetAddr *from) {
     data = GUEST_PTR(data);
     from = GUEST_PTR(from);
+    sim_flush();
     int socks[2] = {s_sock, s_beacon_sock};
     for (int i = 0; i < 2; i++) {
         if (socks[i] < 0) continue;

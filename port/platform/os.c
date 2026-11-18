@@ -349,7 +349,19 @@ static uint64_t s_next_vblank_ns;
 
 static uint64_t vblank_period_ns(void) { return 1000000000000ull / (g_vblank_rate_mhz ? g_vblank_rate_mhz : 59826); } // ns per VBlank
 
+static uint64_t s_last_vblank_ns;
+
+// For the wireless (wm7.c): where this console is in its frame, and a nudge of its VBlank timing. On the DS, MP
+// children keep their VBlank in step with the parent's; here a child steers its own from when the parent's data
+// arrives.
+int64_t port_os_vblank_phase_ns(void) { return (int64_t) (os_time_ns() - s_last_vblank_ns); }
+int64_t port_os_vblank_period_ns(void) { return (int64_t) vblank_period_ns(); }
+void port_os_shift_vblank(int64_t ns) {
+    if (g_vblank_rate_mhz) s_next_vblank_ns += (uint64_t) ns;
+}
+
 static void do_vblank(void) {
+    s_last_vblank_ns = os_time_ns();
     port_frame_vblank();
     g_frame_count++;
     SYSTEM_WORK->mVblankCount++;

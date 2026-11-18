@@ -39,6 +39,22 @@ FIXUPS = [
      "    {0, 0x82, 0xd, 0, -1}, {1, 0x82, 0xd, 2, -1}, {2, 0x82, 0xd, 4, -1}, {3, 0x82, 0xd, 6, -1}, {4, 0x82, 0xd, 8, -1},\n"
      "    {5, 0x82, 0xd, 10, -1}, {6, 0x82, 0xd, 12, -1}, {7, 0x82, 0xd, 14, -1}, {8, 0x78, 0xd, 17, 6}};\n"
      "__asm__(\".globl gMultiSelectMemberSubLabelRows\\n.set gMultiSelectMemberSubLabelRows, gMultiSelectMemberSubLabelRowsStorage_\");", 1),
+    # A frame finished without swapping the 3D buffers (multiplayer: the other players' data was late) keeps the
+    # previous picture; its geometry is dropped instead of piling up under the next frame's (port/platform/gx3d.c).
+    ("src/Main/Scene/display_settings.c",
+     r"    if \(settings->mBg0As == GX_BG0_AS_3D && doSwap != 0\) \{\n"
+     r"        reg_G3_SWAP_BUFFERS = \(settings->mG3xParams->mBufferMode << 1\) \| settings->mG3xParams->mSortMode;\n    \}",
+     "    if (settings->mBg0As == GX_BG0_AS_3D && doSwap != 0) {\n"
+     "        reg_G3_SWAP_BUFFERS = (settings->mG3xParams->mBufferMode << 1) | settings->mG3xParams->mSortMode;\n"
+     "    } else if (settings->mBg0As == GX_BG0_AS_3D) {\n"
+     "        extern void gx3d_discard(void);\n"
+     "        gx3d_discard();\n"
+     "    }", 1),
+    # A scale animation whose middle part lasts to the end divides by zero (the numerator is 0 then too): the DS's
+    # division gives 0, an x86 traps.
+    ("libs/spl/src/particle_system.c",
+     r"ptcl->mScale = scale \+ \(\(lifeRate - 0xff\) \* \(scale - scaleAnim->mMidScale\)\) / \(0xff - hi\);",
+     "ptcl->mScale = scale + (hi == 0xff ? 0 : ((lifeRate - 0xff) * (scale - scaleAnim->mMidScale)) / (0xff - hi));", 1),
     # The game's entry point; `main` is the host program's.
     ("src/Main/System/main.c", r"^void main\(void\) \{", "void GameMain(void) {", 1),
     # VIEWPORT geometry command written by address.

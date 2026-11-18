@@ -716,6 +716,21 @@ static void latch_render_registers(Gx3dFrame *f) {
     f->alpha_ref = IO8(0x340) & 31;
 }
 
+// A frame the game finished without SWAP_BUFFERS (a multiplayer frame whose shared data was late): the DS keeps
+// showing the previous picture. Its geometry is dropped, so that it does not pile up under the next frame's (the same
+// scene twice: overflowing lists, doubled translucent polygons, model pieces the interpolation cannot pair).
+void gx3d_discard(void) {
+    if (G.swap_pending) {
+        return;
+    }
+    Gx3dFrame *f = building();
+    f->polygon_count = 0;
+    f->proj_aspect = 0;
+    f->vertex_count = 0;
+    G.draw_tag = 0;
+    update_gxstat();
+}
+
 // VBlank: a list ended by SWAP_BUFFERS becomes the displayed one and a new list starts.
 void gx3d_vblank(void) {
     if (!G.swap_pending) {

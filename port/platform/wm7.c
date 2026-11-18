@@ -63,9 +63,12 @@ typedef struct DataBody {
     u32 seq;
     u8 kind, port;
     u16 mp_seq; // the MP sequence number the receiver sees (WMPortRecvCallback.seqNo)
-    u16 size, reserved;
+    u16 size;
+    u16 phase; // where the sender was in its frame when it sent this, in 4 µs units (not on resends)
     u8 data[0x200];
 } DataBody;
+
+#define DATA_RESENT 0x80 // in DataBody.kind
 
 typedef struct AckBody {
     u32 next; // every packet before this one arrived
@@ -79,7 +82,7 @@ typedef struct AckBody {
 #define MAX_PARENTS 8     // parents heard while scanning
 #define MAX_SENDS 64      // port sends waiting for their acknowledgements
 #define MAX_HELD 64       // received port data waiting for its port callback
-#define RESEND_NS 30000000ull
+#define RESEND_NS 20000000ull
 #define KEEPALIVE_NS 100000000ull
 #define LINK_TIMEOUT_NS 5000000000ull
 #define BEACON_NS 100000000ull
@@ -89,6 +92,8 @@ typedef struct AckBody {
 #define HELD_TIMEOUT_NS 3000000000ull
 
 typedef struct OutPacket {
+    u64 first_ns; // first sent
+    bool resent;
     u16 size;
     u8 bytes[sizeof(NetHeader) + sizeof(DataBody)];
 } OutPacket;
@@ -102,7 +107,8 @@ typedef struct Link {
     u32 send_next, send_acked; // packets [send_acked, send_next) are in flight
     OutPacket *out;            // OUT_SLOTS
     u32 recv_next;
-    bool mp_ready; // a child that started MP
+    bool mp_ready;  // a child that started MP
+    int64_t srtt_ns; // smoothed round trip time, -1 = none yet
 } Link;
 
 typedef struct Parent { // a parent heard while scanning
@@ -226,6 +232,10 @@ static void send_packet(const HostNetAddr *to, u8 type, u16 aid, const void *bod
 
 static u16 own_aid(void) { return s_status ? s_status->mOwnMemberIndex : 0; }
 
+int64_t port_os_vblank_phase_ns(void);
+int64_t port_os_vblank_period_ns(void);
+void port_os_shift_vblank(int64_t ns);
+
 static void link_transmit(Link *l, u32 seq, u64 now) {
     OutPacket *p = &l->out[seq % OUT_SLOTS];
     hapi_net_send(&l->addr, p->bytes, p->size);
@@ -251,11 +261,17 @@ static bool link_push(Link *l, u8 kind, u16 port, u16 mp_seq, const void *data, 
     d->port = (u8) port;
     d->mp_seq = mp_seq;
     d->size = size;
-    d->reserved = 0;
+    int64_t phase = port_os_vblank_phase_ns() / 4000;
+    d->phase = (u16) (phase < 0 ? 0 : phase > 0xffff ? 0xffff : phase);
     if (size) memcpy(d->data, data, size);
     p->size = (u16) (sizeof(NetHeader) + h->length);
     u64 now = now_ns();
+    p->first_ns = now;
+    p->resent = false;
     if (l->send_next - l->send_acked == 1) l->resend_ns = now + RESEND_NS;
+    // Twice: the races exchange inputs every frame in lockstep, and a lost datagram would stall them until it is
+    // resent. The receiver keeps the first copy.
+    link_transmit(l, seq, now);
     link_transmit(l, seq, now);
     if (seq_out) *seq_out = seq;
     return true;
@@ -322,6 +338,7 @@ static Link *link_open(u16 aid, const HostNetAddr *addr, const u8 *mac) {
     l->addr = *addr;
     memcpy(l->mac, mac, 6);
     l->heard_ns = l->sent_ns = now_ns();
+    l->srtt_ns = -1;
     return l;
 }
 
@@ -494,6 +511,30 @@ static void join_failed(u16 result) {
     port_log("wm7: joining failed (%d)", result);
 }
 
+// ------------------------------------------------------------------------------------------------ VBlank sync
+// A child keeps its frames in step with the parent's, as MP children do on the DS: half a frame after the parent's.
+// The races exchange their inputs every frame (data sharing); with the child half a frame behind, each side's data
+// has half a frame to cross the network before the other side needs it, the most room for the Wi-Fi's jitter both
+// ways. Each packet from the parent says where the parent was in its frame when it sent it; with half the round
+// trip time for the way, the child knows where the parent's VBlank is and nudges its own a little.
+static int64_t wrap_phase(int64_t d, int64_t period) {
+    while (d >= period / 2) d -= period;
+    while (d < -period / 2) d += period;
+    return d;
+}
+
+static void sync_to_parent(const Link *l, const DataBody *d) {
+    if (l->srtt_ns < 0) return;
+    int64_t period = port_os_vblank_period_ns();
+    int64_t parent_phase = (int64_t) d->phase * 4000 + l->srtt_ns / 2; // the parent's phase now
+    int64_t err = wrap_phase(parent_phase - port_os_vblank_phase_ns() - period / 2, period);
+    // err > 0: the parent is further into its frame than half a frame ahead: this VBlank comes too late.
+    int64_t shift = -err / 8;
+    if (shift > 150000) shift = 150000;
+    if (shift < -150000) shift = -150000;
+    port_os_shift_vblank(shift);
+}
+
 static void port_send(const u32 *p) {
     u32 data = p[0], size = p[1] & 0xffff, dest = p[2] & 0xffff, port = p[3] & 0xffff;
     u32 callback = p[5], arg = p[6];
@@ -529,9 +570,12 @@ static void port_send(const u32 *p) {
             send_done(s, WIRELESS_RESULT_SEND_BACKLOG);
             return;
         }
-        s->remaining |= (u16) (1 << a);
+        s->sent |= (u16) (1 << a);
     }
-    if (!s->remaining) send_done(s, WIRELESS_RESULT_SUCCEEDED);
+    // Done at once, as an MP send is within its MP cycle on the DS: delivery is certain (resent until acknowledged),
+    // and the data sharing reads its own set only after the send is done, which waiting for the acknowledgement
+    // would delay by a round trip.
+    send_done(s, WIRELESS_RESULT_SUCCEEDED);
 }
 
 void port_wm7_command(u32 address) {
@@ -760,7 +804,7 @@ static void deliver_held(void) {
 }
 
 static void receive_data(Link *l, const DataBody *d) {
-    switch (d->kind) {
+    switch (d->kind & ~DATA_RESENT) {
     case DATA_MP_READY:
     case DATA_MP_STOP:
         l->mp_ready = d->kind == DATA_MP_READY;
@@ -924,6 +968,11 @@ static void receive(const u8 *buf, int32_t n, const HostNetAddr *from) {
         l->heard_ns = now;
         u32 next = ((const AckBody *) body)->next;
         if (next > l->send_acked && next <= l->send_next) {
+            const OutPacket *last = &l->out[(next - 1) % OUT_SLOTS];
+            if (!last->resent) {
+                int64_t rtt = (int64_t) since(now, last->first_ns);
+                l->srtt_ns = l->srtt_ns < 0 ? rtt : l->srtt_ns + (rtt - l->srtt_ns) / 8;
+            }
             l->send_acked = next;
             l->resend_ns = now + RESEND_NS;
             check_sends();
@@ -937,6 +986,7 @@ static void receive(const u8 *buf, int32_t n, const HostNetAddr *from) {
         const DataBody *d = (const DataBody *) body;
         if (d->seq == l->recv_next) {
             l->recv_next++;
+            if (s_child && l->aid == 0 && !(d->kind & DATA_RESENT)) sync_to_parent(l, d);
             receive_data(l, d);
         }
         send_ack(l); // also for repeats, whose acknowledgement was lost
@@ -987,7 +1037,12 @@ bool port_wm7_poll(void) {
             }
             if (l->send_acked != l->send_next && now >= l->resend_ns) {
                 // Resend what is in flight (the oldest first, a few at a time).
-                for (u32 s = l->send_acked; s != l->send_next && s - l->send_acked < 8; s++) link_transmit(l, s, now);
+                for (u32 s = l->send_acked; s != l->send_next && s - l->send_acked < 8; s++) {
+                    OutPacket *p = &l->out[s % OUT_SLOTS];
+                    p->resent = true;
+                    ((DataBody *) (p->bytes + sizeof(NetHeader)))->kind |= DATA_RESENT;
+                    link_transmit(l, s, now);
+                }
                 l->resend_ns = now + RESEND_NS;
             }
             if (since(now, l->sent_ns) > KEEPALIVE_NS) send_ack(l);
