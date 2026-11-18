@@ -1,48 +1,100 @@
-# Mario Kart DS — native Android port
+# Mario Kart DS for Android
 
-Native port of *Mario Kart DS* (EUR, `AMCP`) built from the [RonyxDumb/mkds](https://github.com/RonyxDumb/mkds)
-decompilation (`decomp/`, git submodule). No emulation: the game's C code is compiled with the NDK clang and runs
-directly on the phone's CPU; the Nintendo DS hardware the game talks to is replaced by a native platform layer.
+A native Android port of *Mario Kart DS*, built from the [mkds](https://github.com/RonyxDumb/mkds) decompilation.
 
-Goals: 16:9 widescreen, 120/240 fps presentation, high internal resolution.
+This is **not an emulator**: the game's C code is compiled for ARM and runs directly on your phone, with the Nintendo
+DS hardware replaced by a native platform layer (OpenGL ES 3 graphics, native sound driver, Android input and audio).
 
-**No game content in this repository.** On first launch the app asks for your own ROM dump
-(SHA-1 `ce97d9b43f0d3ca0d48b781983e8a16f6393378f`) and reads the game files from it.
+**No game content is included.** You need your own dump of the game.
 
-## Layout
-| Path | Contents |
+## Features
+- Native performance on 32-bit and 64-bit ARM phones
+- High-resolution 3D rendering
+- Full widescreen: races, menus and award ceremonies fill the whole display
+- 120 fps (and higher) on high refresh rate displays, through frame interpolation
+- Touch controls designed for phones, with a floating stick
+- Gamepad support (USB and Bluetooth); on-screen controls hide automatically
+- Local multiplayer over Wi-Fi between phones running the app (Multi-Card Play)
+- Game language follows the phone's language (English, French, German, Italian, Spanish)
+
+## Requirements
+- Android 8.0 or newer, ARM (arm64-v8a or armeabi-v7a)
+- OpenGL ES 3.0
+- A ROM of **Mario Kart DS (Europe)**, game code `AMCP`
+  (SHA-1 `ce97d9b43f0d3ca0d48b781983e8a16f6393378f`)
+
+## Installation
+1. Download the APK from the [Releases](../../releases) page and install it.
+2. On first launch, select your ROM file. It is copied into the app's private storage; the original is not modified.
+3. Play. Saves are kept in the app's storage and survive updates.
+
+## Controls
+| Touch | Action |
 | --- | --- |
-| `decomp/` | The decompilation (submodule), compiled unmodified |
-| `port/compat/` | Clang compatibility: force-included prefix header and shadow headers (same relative path as in `decomp/include`, searched first) |
-| `port/overrides/` | Native replacements for decomp files that drive the DS hardware directly (SDK `OS`, `MI`, `GX`, `SND`, `FS` ...) |
-| `port/platform/` | Platform layer: DS memory map, 2D/3D graphics on OpenGL ES, sound, file system from the ROM, input |
-| `app/` | Android application (Gradle) |
-| `tools/` | Build helpers |
+| Left half of the screen | Floating stick (appears where your thumb lands) |
+| **A** (large) / **R** (above it) | Accelerate / drift — one thumb between them holds both |
+| **B** | Brake / reverse |
+| **L** | Use item |
+| **X**, **Y** | As on the DS |
+| **SELECT**, **START** | As on the DS |
+| ⇄ | Swap the screens: the touch screen becomes large, for menus |
+| Touch screen (inset) | Stylus input |
 
-## Architecture
-- **ABI**: `armeabi-v7a` first. The game, its file formats and the SDK assume 32-bit pointers; a 32-bit process keeps
-  every structure and every file loaded in place exactly as on the DS.
-- **Hardware**: register writes with side effects (3D geometry commands, divider/sqrt, DMA, IPC to the ARM7) go
-  through the platform layer; the rest of the I/O space, VRAM, OAM and palettes are plain memory the renderers read.
-- **ARM7**: not part of the decomp. Its services (sound sequence player, touch screen, RTC, saves) are reimplemented
-  natively behind the same IPC interface.
-- **Graphics**: the DS geometry engine is reimplemented in C (matrix stacks, lighting, clipping) and its polygon
-  lists are rasterised with OpenGL ES 3 at high resolution. Widescreen widens the 3D projection and the viewport;
-  high frame rates interpolate between consecutive game frames.
+The Android back gesture pauses the game during a race and does nothing elsewhere.
 
-## Status
-- [x] The whole decomp compiles with clang (ARMv7 Android, 32-bit Linux for tests)
-- [x] Platform layer: memory map, OS threads/interrupts/alarms, DMA, card + save, firmware NVRAM, services
-- [x] Boots to the menus and runs races (host test build, software renderer)
-- [ ] OpenGL ES 3 renderer (high resolution)
-- [ ] Android app: input, ROM import, audio output, saves
-- [ ] Sound driver (sequence player, mixer)
-- [ ] Widescreen, 120/240 fps
+With a gamepad connected, the on-screen controls are hidden (the screen swap button stays). If the gamepad
+disconnects during a race, the game pauses and the touch controls come back. L2/R2 also work as L/R.
 
-## Testing on Linux
+## Local multiplayer
+1. Connect both phones to the same Wi-Fi network (a hotspot from one of them works too).
+2. On the first phone: **Multiplayer → Multi-Card Play → Create Group**.
+3. On the second phone: **Multiplayer → Multi-Card Play**, then select the group.
+4. On the first phone, touch **Cut Off** and choose the race settings.
+
+Races share every frame's input in lockstep, as on the DS: a stable Wi-Fi connection gives the smoothest play.
+DS Download Play is not supported (every player needs the app and the game).
+
+## Building
+Clone with the decompilation submodule:
 ```shell
-CC=clang CFLAGS=-m32 LDFLAGS="-m32 -fuse-ld=lld" cmake -S port -B build/host -G Ninja
+git clone --recursive https://github.com/RonyxDumb/mkds-android
+```
+
+Requirements:
+- Android SDK (platform 35), NDK `28.2.13676358`, CMake `3.22.1`, JDK 17
+- For the arm64 build: `gcc-aarch64-linux-gnu` (GCC 13; newer versions fail on `-mabi=ilp32`), Python 3, Ninja
+
+```shell
+./gradlew assembleRelease
+```
+The APK is written to `app/build/outputs/apk/release/`. The GitHub Actions workflow
+(`.github/workflows/android.yml`) builds it on every push.
+
+### Linux test build
+A headless build runs the game on a PC and writes both screens as PNG images, for debugging:
+```shell
+CC=clang CFLAGS=-m32 cmake -S port -B build/host -G Ninja
 ninja -C build/host
 build/host/mkds rom.nds --frames 1800 --dump-every 100 --out frames --press 330:A:4
 ```
-Runs headless on a virtual clock and writes both screens as PNG.
+
+## How it works
+| Path | Contents |
+| --- | --- |
+| `decomp/` | The decompilation (submodule) |
+| `tools/portify.py` | Prepares the decompiled sources for the port (a few documented fixups) |
+| `port/platform/` | DS platform layer: memory map, OS, 2D and 3D graphics, sound driver, wireless, file system from the ROM |
+| `port/guest/` | 64-bit ARM: the game runs as a 32-bit-pointer image in its own process |
+| `app/` | Android application |
+
+- **CPU**: the game assumes 32-bit pointers. On 32-bit ARM it runs as is; on 64-bit ARM it is compiled with GCC's
+  ILP32 AArch64 target and runs in a separate process, where the DS address space is free.
+- **Graphics**: the DS geometry engine is reimplemented in C; its polygon lists are drawn with OpenGL ES 3 at high
+  resolution. The 2D engines are rendered in software, wider than the DS screen for widescreen.
+- **Sound**: the DS sound driver (the ARM7 side) is reimplemented natively and mixes into Android's audio output.
+- **Wireless**: the game's own wireless library runs unchanged; its ARM7 side is reimplemented over UDP on the local
+  network.
+
+## Legal
+This project contains no Nintendo code or assets. *Mario Kart DS* and Nintendo DS are trademarks of Nintendo.
+This is an unofficial fan project, not affiliated with or endorsed by Nintendo. Only use it with a game you own.
