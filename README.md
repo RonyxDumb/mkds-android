@@ -113,9 +113,9 @@ and 3S). It installs next to the phone app, with its own save file.
 Build it with `./gradlew assembleQuestRelease` (the phone app: `assemblePhoneRelease`).
 
 ## Building
-Clone with the decompilation submodule:
+Clone the repository (the decompilation is included in `decomp/`):
 ```shell
-git clone --recursive https://github.com/RonyxDumb/mkds-android
+git clone https://github.com/RonyxDumb/mkds-android
 ```
 
 Requirements:
@@ -139,8 +139,8 @@ build/host/mkds rom.nds --frames 1800 --dump-every 100 --out frames --press 330:
 ## How it works
 | Path | Contents |
 | --- | --- |
-| `decomp/` | The decompilation (submodule) |
-| `tools/portify.py` | Prepares the decompiled sources for the port (a few documented fixups) |
+| `decomp/` | The decompilation, with the changes the port needs made directly in its sources (the original [mkds](https://github.com/RonyxDumb/mkds) is not modified) |
+| `tools/portify.py` | Collects the sources the port compiles and checks them (register writes) |
 | `port/platform/` | DS platform layer: memory map, OS, 2D and 3D graphics, sound driver, wireless, file system from the ROM |
 | `tools/relay_server.py` | The relay server for online play |
 | `port/guest/` | 64-bit ARM: the game runs as a 32-bit-pointer image in its own process |
