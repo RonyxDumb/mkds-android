@@ -203,3 +203,6 @@ void DGTi_hash2_arm4_small(DGTHash2Context *ctx, u8 *data, int size) {
         ctx->mWords[4] += e;
     }
 }
+
+// The point link a CPU kart's AI is reset to, passed on in r1 on the DS (see tools/portify.py).
+void *g_port_ai_reset_link;

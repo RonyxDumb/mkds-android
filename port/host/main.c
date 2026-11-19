@@ -69,6 +69,17 @@ static bool on_frame(const FrameSnapshot *f, uint64_t n) {
                      a1 >> 14, (a0 >> 8) & 1, (a0 >> 9) & 1, (a0 >> 10) & 3);
         }
     }
+    if (getenv("MKDS_SUBLOG") && n >= (uint64_t) atoi(getenv("MKDS_SUBLOG")) && n < (uint64_t) atoi(getenv("MKDS_SUBLOG")) + 6) { // tests: the sub engine's state
+        port_log("frame %llu capcnt %08x POWCNT %04x DISPCNT A %08x", (unsigned long long) n, *(const uint32_t *) (f->io + 0x64),
+                 *(const uint16_t *) (f->io + 0x304), *(const uint32_t *) f->io);
+        const uint16_t *b = (const uint16_t *) (f->io + 0x1000);
+        port_log("sub DISPCNT %04x%04x BGCNT %04x %04x %04x %04x VRAMCNT %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                 b[1], b[0], b[4], b[5], b[6], b[7], f->vramcnt[0], f->vramcnt[1], f->vramcnt[2], f->vramcnt[3],
+                 f->vramcnt[4], f->vramcnt[5], f->vramcnt[6], f->vramcnt[8], f->vramcnt[9]);
+        port_log("sub BG2 PA %04x PB %04x PC %04x PD %04x X %08x Y %08x BG3 PA %04x X %08x", b[0x10], b[0x11], b[0x12],
+                 b[0x13], *(const uint32_t *) (b + 0x14), *(const uint32_t *) (b + 0x16), b[0x18],
+                 *(const uint32_t *) (b + 0x1c));
+    }
     if (s_bglog) {
         const uint16_t *io = (const uint16_t *) f->io;
         port_log("win %04x %04x %04x %04x in %04x out %04x", io[0x20], io[0x21], io[0x22], io[0x23], io[0x24], io[0x25]);
@@ -147,6 +158,21 @@ static void parse_press(const char *spec) {
     }
 }
 
+// MKDS_FINISH_AT=frame: every kart reaches the goal at that frame (tests: to get past a race quickly).
+#ifndef PORT_IPC
+// Game-side symbols: not reachable in the arm64 split build (weak).
+extern void (*g_port_vblank_hook)(void) __attribute__((weak));
+extern uint64_t g_frame_count __attribute__((weak));
+void FinishRaceProgressKartWithEndKind(int32_t kartIndex, int32_t endKind) __attribute__((weak));
+static uint64_t s_finish_at;
+static void finish_hook(void) {
+    if (s_finish_at && g_frame_count == s_finish_at) {
+        for (int k = 0; k < 8; k++) FinishRaceProgressKartWithEndKind(k, 0);
+        port_log("test: race finished");
+    }
+}
+#endif
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: %s rom.nds [--frames N] [--dump-every K] [--out DIR] [--realtime] [--press F:BTN[:LEN]]\n",
@@ -155,6 +181,12 @@ int main(int argc, char **argv) {
     }
     uint32_t rate = 0;
     const char *save = "mkds.sav";
+#ifndef PORT_IPC
+    if (getenv("MKDS_FINISH_AT") && &g_port_vblank_hook) {
+        s_finish_at = strtoull(getenv("MKDS_FINISH_AT"), NULL, 0);
+        g_port_vblank_hook = finish_hook;
+    }
+#endif
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--frames") && i + 1 < argc) s_frames = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--dump-every") && i + 1 < argc) s_dump_every = strtoull(argv[++i], NULL, 0);
@@ -172,6 +204,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--keyon")) {
             extern bool g_snd_keyon_log __attribute__((weak)); // not reachable in the arm64 split build
             if (&g_snd_keyon_log) g_snd_keyon_log = true;
+            extern bool g_snd_chlog __attribute__((weak));
+            if (&g_snd_chlog && getenv("MKDS_CHLOG")) g_snd_chlog = true;
         }
         else if (!strcmp(argv[i], "--wav") && i + 1 < argc) {
             s_wav = fopen(argv[++i], "wb");

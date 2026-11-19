@@ -360,8 +360,11 @@ void port_os_shift_vblank(int64_t ns) {
     if (g_vblank_rate_mhz) s_next_vblank_ns += (uint64_t) ns;
 }
 
+void (*g_port_vblank_hook)(void); // tests (host/main.c)
+
 static void do_vblank(void) {
     s_last_vblank_ns = os_time_ns();
+    if (g_port_vblank_hook) g_port_vblank_hook();
     port_frame_vblank();
     g_frame_count++;
     SYSTEM_WORK->mVblankCount++;

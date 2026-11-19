@@ -46,8 +46,9 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             showCrashReport(crash);
             return;
         }
+        UpdateCheck.start(this);
         if (isValidRom(romFile())) {
-            startGame();
+            chooseLanguageThenStart();
         } else {
             new AlertDialog.Builder(this)
                     .setTitle("Mario Kart DS")
@@ -113,7 +114,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             showError("This is not Mario Kart DS (Europe, game code AMCP).");
             return;
         }
-        startGame();
+        chooseLanguageThenStart();
     }
 
     private void copy(Uri uri, File dst) throws Exception {
@@ -147,9 +148,41 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 .show();
     }
 
+    // ------------------------------------------------------------------------------------------ start
+    // The game's languages (Europe): the game is started in the one chosen at each launch.
+    private static final String[] LANGUAGE_NAMES = {"English", "Français", "Deutsch", "Italiano", "Español"};
+    private static final int[] LANGUAGE_IDS = {1, 2, 3, 4, 5};
+    private int mLanguage = 1;
+    private LanguageScreen mLanguageScreen;
+
+    private void chooseLanguageThenStart() {
+        if (sStarted) {
+            startGame();
+            return;
+        }
+        android.content.SharedPreferences prefs = getSharedPreferences("mkds", MODE_PRIVATE);
+        int last = prefs.getInt("language", gameLanguage());
+        mLanguageScreen = new LanguageScreen(this, LANGUAGE_NAMES, indexOfLanguage(last), index -> {
+            mLanguage = LANGUAGE_IDS[index];
+            prefs.edit().putInt("language", mLanguage).apply();
+            mLanguageScreen = null;
+            startGame();
+        });
+        setContentView(mLanguageScreen.view());
+        hideSystemBars();
+        UpdateCheck.whenAvailable(this, mLanguageScreen::showUpdate);
+    }
+
+    private static int indexOfLanguage(int id) {
+        for (int i = 0; i < LANGUAGE_IDS.length; i++) {
+            if (LANGUAGE_IDS[i] == id) return i;
+        }
+        return 0;
+    }
+
     private void startGame() {
         if (!sStarted) {
-            Native.setLanguage(gameLanguage());
+            Native.setLanguage(mLanguage);
             mOnline.applyVolume();
             String err = Native.start(romFile().getAbsolutePath(), new File(getFilesDir(), "mkds.sav").getAbsolutePath());
             if (err != null) {
@@ -349,11 +382,22 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             };
     private boolean mGamepad;
 
+    // A real gamepad: some phones list built-in devices (sensors, fingerprint readers, a "virtual joystick") with
+    // gamepad or joystick sources, so the device must also be external (Android 10+) and have gamepad buttons.
     private static boolean isGamepad(InputDevice d) {
         if (d == null || d.isVirtual()) return false;
         int s = d.getSources();
-        return (s & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+        boolean source = (s & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
                 || (s & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+        if (!source) return false;
+        if (android.os.Build.VERSION.SDK_INT >= 29 && !d.isExternal()) return false;
+        boolean[] keys = d.hasKeys(KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_B);
+        return keys[0] || keys[1];
+    }
+
+    /** The player used a gamepad: its controls take over (the on-screen ones hide) until the screen is touched. */
+    private void gamepadUsed() {
+        if (mControls != null && !mControls.isGamepadMode()) mControls.setGamepadMode(true);
     }
 
     private void updateGamepads(boolean removed) {
@@ -409,8 +453,12 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (mLanguageScreen != null && mLanguageScreen.onKey(event)) return true;
         int button = buttonFor(event.getKeyCode());
         if (button == 0 || mControls == null) return super.dispatchKeyEvent(event);
+        if (event.isFromSource(InputDevice.SOURCE_GAMEPAD) || event.isFromSource(InputDevice.SOURCE_JOYSTICK)) {
+            gamepadUsed();
+        }
         if (event.getAction() == KeyEvent.ACTION_DOWN) mPadButtons |= button;
         else if (event.getAction() == KeyEvent.ACTION_UP) mPadButtons &= ~button;
         mControls.setPadButtons(mPadButtons);
@@ -428,8 +476,14 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             if (x > 0.4f) stick |= Native.RIGHT;
             if (y < -0.4f) stick |= Native.UP;
             if (y > 0.4f) stick |= Native.DOWN;
-            if (event.getAxisValue(MotionEvent.AXIS_LTRIGGER) > 0.5f) stick |= Native.L;
-            if (event.getAxisValue(MotionEvent.AXIS_RTRIGGER) > 0.5f) stick |= Native.R;
+            // Triggers: some gamepads report them as brake and gas.
+            if (Math.max(event.getAxisValue(MotionEvent.AXIS_LTRIGGER), event.getAxisValue(MotionEvent.AXIS_BRAKE)) > 0.5f) {
+                stick |= Native.L;
+            }
+            if (Math.max(event.getAxisValue(MotionEvent.AXIS_RTRIGGER), event.getAxisValue(MotionEvent.AXIS_GAS)) > 0.5f) {
+                stick |= Native.R;
+            }
+            if (stick != 0) gamepadUsed();
             mControls.setStickButtons(stick);
             return true;
         }

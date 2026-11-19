@@ -94,7 +94,7 @@ final class ControlsView extends View {
 
         // Right hand: A big, R above it, close enough for one thumb to cover both; B to the left of A; L and X/Y above B.
         place(mA, w - u * 1.45f, h - u * 1.55f, u * 0.95f);
-        place(mR, w - u * 1.45f, h - u * 3.55f, u * 0.8f);
+        place(mR, w - u * 1.45f, h - u * 3.5f, u * 0.9f);
         place(mB, w - u * 3.45f, h - u * 1.1f, u * 0.75f);
         place(mL, w - u * 3.45f, h - u * 2.9f, u * 0.7f);
         place(mX, w - u * 3.1f, h - u * 4.55f, u * 0.5f);
@@ -169,6 +169,10 @@ final class ControlsView extends View {
     private boolean hidden(Button b, boolean race) {
         if (b.bits == MIC) return !mVoice;
         return b.bits == NET ? race : mGamepadMode && b.bits != SWAP;
+    }
+
+    boolean isGamepadMode() {
+        return mGamepadMode;
     }
 
     void setGamepadMode(boolean on) {
@@ -246,7 +250,10 @@ final class ControlsView extends View {
             } else if (mTouchRect.width() > 0 && mTouchRect.contains(x, y)) {
                 f.role = ROLE_STYLUS;
             } else if (mGamepadMode) {
-                f.role = ROLE_BUTTONS; // nothing under it
+                // The screen touched outside the touch screen with the gamepad's controls on: the on-screen controls
+                // come back (also when a built-in device was taken for a gamepad).
+                mGamepadMode = false;
+                f.role = x < mWidth * 0.5f ? ROLE_STICK : ROLE_BUTTONS;
             } else if (x < mWidth * 0.5f) {
                 f.role = ROLE_STICK;
             } else {

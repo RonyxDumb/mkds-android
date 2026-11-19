@@ -65,6 +65,15 @@ FIXUPS = [
      "MI_CpuCopy8(port_player_name(gBackupBuffers->mFirstBlock->mPlayerName), userData", 1),
     ("src/Main/Race/race_setup_input.c", r"\*nameSlot = &gBackupBuffers->mFirstBlock->mPlayerName;",
      "*nameSlot = port_player_name(gBackupBuffers->mFirstBlock->mPlayerName);", 1),
+    # Resetting a CPU kart's AI after it fell off (Lakitu) reads the point link the caller passed on in r1: the
+    # callback ResetKartAiForRace takes only the AI, and ResetRaceKartAiAtPointLink uses r1 as an uninitialised
+    # local. The link is handed over through a variable instead (crash in Delfino Plaza).
+    ("src/Main/Kart/kart_ai_staff_roll_advance.c", r"    gKartAiResetCallback\(kartAi, link\);",
+     "    extern void *g_port_ai_reset_link;\n    g_port_ai_reset_link = link;\n    gKartAiResetCallback(kartAi, link);", 1),
+    ("src/Main/Kart/point_link_cursor.c",
+     r"    RacePointLink \*pointLink;\n\n    ResetPointLinkCursor\(&kartAi->mPointLinkCursor, pointLink\);",
+     "    extern void *g_port_ai_reset_link;\n    RacePointLink *pointLink = (RacePointLink *) g_port_ai_reset_link;\n\n"
+     "    ResetPointLinkCursor(&kartAi->mPointLinkCursor, pointLink);", 1),
     # The game's entry point; `main` is the host program's.
     ("src/Main/System/main.c", r"^void main\(void\) \{", "void GameMain(void) {", 1),
     # VIEWPORT geometry command written by address.

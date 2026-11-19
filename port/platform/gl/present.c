@@ -6,6 +6,11 @@
 // 3D layer, and a shader composites them with the colour effects and the master brightness. Frames with a display
 // capture (dual-screen 3D, menu blur) are drawn entirely in software, because the capture writes into VRAM that the
 // next frames display (the displayed frame itself still uses the GPU path when it has 3D).
+//
+// Dual-screen 3D (the race intros of the Grand Prix): the game draws its 3D on the two screens in turn, swapping the
+// screens every frame (POWCNT bit 15) and showing on the other one the capture of the frame before. Here each
+// screen is drawn from its own last frame instead (the GPU path, high resolution, widescreen on the top screen), and
+// its 3D is interpolated between that screen's frames, two VBlanks apart.
 #include "port.h"
 #include "frame.h"
 #include "gpu2d.h"
@@ -135,6 +140,22 @@ typedef struct Presented {
 } Presented;
 
 static GLuint s_prog_plain, s_prog_compose, s_tex_plain[2], s_tex_above, s_tex_below;
+
+// Dual-screen 3D: engine A's picture of each screen (index 0 = top), from the last frame it was on that screen.
+typedef struct Held {
+    bool valid;
+    uint64_t number;    // of its last frame
+    int width;          // of its 2D (widescreen on the top screen)
+    uint16_t bright;
+    float backdrop[3];
+    GLuint above, below;
+    int cur;            // its last 3D list in s_alt3d[screen][cur], the one before in [cur ^ 1]
+    bool have_prev;
+} Held;
+static bool s_alt; // dual-screen 3D
+static bool s_prev_a_on_top;
+static Held s_held[2];
+static Gx3dFrame s_alt3d[2][2];
 static GLint s_u_bright_mode, s_u_bright, s_u_k2, s_u_k3, s_u_backdrop;
 static Presented s_shown = {true, true, false, 256, 256, 0, {0, 0, 0}, 1, NULL};
 static float s_wide = 1.0f; // the display's aspect ratio / (4/3)
@@ -170,6 +191,10 @@ void present_init(void) {
     s_tex_plain[1] = make_texture();
     s_tex_above = make_texture();
     s_tex_below = make_texture();
+    for (int i = 0; i < 2; i++) {
+        s_held[i].above = make_texture();
+        s_held[i].below = make_texture();
+    }
     gl3d_init();
 }
 
@@ -188,6 +213,46 @@ void present_update(const FrameSnapshot *f, int scale) {
     bool capture = f->io[0x67] & 0x80;
     uint32_t dispcnt_a = (uint32_t) f->io[0] | f->io[1] << 8 | f->io[2] << 16 | (uint32_t) f->io[3] << 24;
     bool has_3d = (dispcnt_a & 8) && ((dispcnt_a >> 16) & 3) == 1;
+
+    // Dual-screen 3D: a whole-screen capture of engine A (256x192, source A only) while the screens swap. It goes
+    // on while the capture does, even if a frame was skipped here.
+    uint32_t capcnt = (uint32_t) f->io[0x64] | f->io[0x65] << 8 | f->io[0x66] << 16 | (uint32_t) f->io[0x67] << 24;
+    bool whole_capture = capture && has_3d && ((capcnt >> 20) & 3) == 3 && ((capcnt >> 29) & 3) == 0;
+    if (!whole_capture) {
+        s_held[0].valid = s_held[1].valid = false;
+        s_alt = false;
+    } else if (!s_alt && f->number == s_last_number + 1 && s_shown.a_on_top != s_prev_a_on_top) {
+        s_alt = true;
+        s_held[0].valid = s_held[1].valid = false;
+    }
+    s_prev_a_on_top = s_shown.a_on_top;
+    if (s_alt) {
+        // No capture needed: the other screen is drawn from its own frame.
+        Held *h = &s_held[s_shown.a_on_top ? 0 : 1];
+        gpu2d_render_split(f, buf_a, buf_below, buf_b, s_shown.a_on_top ? margin : 0, s_shown.a_on_top ? 0 : margin);
+        h->width = width_a;
+        upload(h->above, buf_a, width_a);
+        upload(h->below, buf_below, width_a);
+        h->bright = (uint16_t) (f->io[0x6c] | f->io[0x6d] << 8);
+        uint16_t bd = (uint16_t) (f->palette[0] | f->palette[1] << 8);
+        h->backdrop[0] = (bd & 31) / 31.0f;
+        h->backdrop[1] = ((bd >> 5) & 31) / 31.0f;
+        h->backdrop[2] = ((bd >> 10) & 31) / 31.0f;
+        h->have_prev = h->valid && f->number == h->number + 2;
+        h->cur ^= 1;
+        copy_list(&s_alt3d[s_shown.a_on_top ? 0 : 1][h->cur], &f->frame3d);
+        h->number = f->number;
+        h->valid = true;
+        s_shown.software = false;
+        upload(s_tex_plain[1], buf_b, width_b); // engine B: shown until the other screen has a frame of its own
+        if (g_capture_done) g_capture_done(); // the game waits for the capture
+        s_have_prev = false;
+        s_shown.race = f->scene == 2;
+        s_shown.scale = scale;
+        s_shown.snap = f;
+        s_last_number = f->number;
+        return;
+    }
     if (capture) {
         // The capture writes the frame into VRAM for later frames (the game shows it again, blends with it): it is
         // made in software at the DS resolution. With 3D, what is displayed still comes from the GPU path below.
@@ -236,7 +301,59 @@ bool present_engine_a_on_top(void) { return s_shown.a_on_top; }
 static GLuint s_target; // the framebuffer present_draw draws into (0: the window)
 void present_set_target(uint32_t framebuffer) { s_target = framebuffer; }
 
+static void draw_alt(const int layout[8], int w, int h, float t) {
+    glBindFramebuffer(GL_FRAMEBUFFER, s_target);
+    glViewport(0, 0, w, h);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    int live = s_shown.a_on_top ? 0 : 1;
+    for (int screen = 0; screen < 2; screen++) {
+        if (layout[screen * 4 + 2] <= 0 || layout[screen * 4 + 3] <= 0) continue; // hidden
+        const Held *hd = &s_held[screen];
+        int r[4];
+        if (!hd->valid) {
+            fit(&layout[screen * 4], 256.0f / 192.0f, r);
+            glUseProgram(s_prog_plain);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, s_tex_plain[1]);
+            draw_quad(r[0], r[1], r[2], r[3], w, h);
+            continue;
+        }
+        // Each screen's frames are two VBlanks apart: the live one is half way from its previous frame, the other
+        // one goes on from there (the picture lags its frame by two VBlanks, and moves without pauses).
+        float ts = screen == live ? t * 0.5f : 0.5f + t * 0.5f;
+        if (ts > 1.0f) ts = 1.0f;
+        float wide = (float) hd->width / 256.0f;
+        const Gx3dFrame *cur = &s_alt3d[screen][hd->cur], *prev = hd->have_prev ? &s_alt3d[screen][hd->cur ^ 1] : NULL;
+        GLuint tex3d = gl3d_render(cur, prev, prev ? ts : 1.0f, s_shown.snap, s_shown.scale, wide);
+        glBindFramebuffer(GL_FRAMEBUFFER, s_target);
+        glViewport(0, 0, w, h);
+        float wq = (float) hd->width;
+        fit(&layout[screen * 4], wq / 192.0f, r);
+        glUseProgram(s_prog_compose);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, hd->above);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, hd->below);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, tex3d);
+        glUniform1f(s_u_k2, 1.0f);
+        glUniform1f(s_u_k3, 1.0f);
+        glUniform3fv(s_u_backdrop, 1, hd->backdrop);
+        uint32_t mode = hd->bright >> 14, factor = hd->bright & 31;
+        if (factor > 16) factor = 16;
+        glUniform1i(s_u_bright_mode, (mode == 1 || mode == 2) ? (int) mode : 0);
+        glUniform1f(s_u_bright, factor / 16.0f);
+        glActiveTexture(GL_TEXTURE0);
+        draw_quad(r[0], r[1], r[2], r[3], w, h);
+    }
+}
+
 void present_draw(const int layout[8], int w, int h, float t) {
+    if (s_alt && s_shown.snap) {
+        draw_alt(layout, w, h, t);
+        return;
+    }
     GLuint tex3d = 0;
     // The 3D layer is as wide as the 2D of its screen (widescreen on the top screen).
     // (Each polygon keeps the proportions of its own projection: gl3d narrows those projected for 4:3.)

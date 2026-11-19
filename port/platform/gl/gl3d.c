@@ -243,8 +243,19 @@ static size_t s_batch_cap;
 // too far away (a cut), is drawn as it is, whole: the parts of a model never separate.
 typedef struct Block {
     uint32_t first, count, sig;
-    float cx, cy, cw; // centre in clip space (sums over the vertices / their number)
+    float cx, cy, cz, cw; // centre in clip space (sums over the vertices / their number)
 } Block;
+
+// Per polygon of the current list, for a paired block that turned a lot (a spinning wheel): it is moved as a whole
+// from where it was, keeping its current shape (interpolating its vertices would shrink it: they cut across the
+// circle).
+typedef struct Rigid {
+    float dx, dy, dz, dw; // previous centre - current centre
+    bool on;
+} Rigid;
+static Rigid *s_rigid;
+static size_t s_rigid_cap;
+static const Gx3dFrame *s_pair_prev, *s_pair_cur;
 
 static Block *s_blocks[2];
 static size_t s_block_cap[2];
@@ -266,7 +277,7 @@ static size_t find_blocks(const Gx3dFrame *f, int which) {
         b->first = i;
         b->count = j - i;
         uint32_t h = 0x811c9dc5u ^ (j - i);
-        double sx = 0, sy = 0, sw = 0;
+        double sx = 0, sy = 0, sz = 0, sw = 0;
         int nv = 0;
         for (uint32_t k = i; k < j; k++) {
             const GxPolygon *p = &f->polygons[k];
@@ -280,6 +291,7 @@ static size_t find_blocks(const Gx3dFrame *f, int which) {
                 const GxVertex *g = &f->vertices[p->first + v];
                 sx += g->x;
                 sy += g->y;
+                sz += g->z;
                 sw += g->w;
                 nv++;
             }
@@ -287,6 +299,7 @@ static size_t find_blocks(const Gx3dFrame *f, int which) {
         b->sig = h;
         b->cx = (float) (sx / nv);
         b->cy = (float) (sy / nv);
+        b->cz = (float) (sz / nv);
         b->cw = (float) (sw / nv);
         i = j;
     }
@@ -344,6 +357,21 @@ static size_t s_anchor_cap;
 static void pair_blocks(const Block *pb, const Block *cb, uint32_t c, uint32_t p) {
     const Block *b = &cb[c], *a = &pb[p];
     for (uint32_t k = 0; k < b->count; k++) s_match[b->first + k] = (int32_t) (a->first + k);
+    // How much the piece changed shape about its centre, against its size.
+    double dev = 0, rad = 0;
+    for (uint32_t k = 0; k < b->count; k++) {
+        const GxPolygon *cp = &s_pair_cur->polygons[b->first + k], *pp = &s_pair_prev->polygons[a->first + k];
+        for (int v = 0; v < cp->count && v < pp->count; v++) {
+            const GxVertex *g = &s_pair_cur->vertices[cp->first + v], *o = &s_pair_prev->vertices[pp->first + v];
+            float rx = g->x - b->cx, ry = g->y - b->cy, rz = g->z - b->cz;
+            float ox = o->x - a->cx, oy = o->y - a->cy, oz = o->z - a->cz;
+            dev += fabsf(rx - ox) + fabsf(ry - oy) + fabsf(rz - oz);
+            rad += fabsf(rx) + fabsf(ry) + fabsf(rz);
+        }
+    }
+    bool rigid = rad > 0 && dev > rad * 0.6;
+    Rigid r = {a->cx - b->cx, a->cy - b->cy, a->cz - b->cz, a->cw - b->cw, rigid};
+    for (uint32_t k = 0; k < b->count; k++) s_rigid[b->first + k] = r;
 }
 
 static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
@@ -360,12 +388,18 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
         s_anchor_cap = (nc + 1) * 2;
         s_anchors = realloc(s_anchors, s_anchor_cap * sizeof(Anchor));
     }
+    if (f->polygon_count + 1 > s_rigid_cap) {
+        s_rigid_cap = (f->polygon_count + 1) * 2;
+        s_rigid = realloc(s_rigid, s_rigid_cap * sizeof(Rigid));
+    }
+    s_pair_prev = prev;
+    s_pair_cur = f;
     for (uint32_t i = 0; i < f->polygon_count; i++) s_match[i] = -1;
     const Block *pb = s_blocks[0], *cb = s_blocks[1];
     const uint32_t *po = sorted_by_sig(pb, np, 0), *co = sorted_by_sig(cb, nc, 1);
 
     // Anchors: structures found once in each list.
-    size_t na = 0;
+    size_t na = 0, uniq = 0, jumped = 0;
     for (size_t pi = 0, ci = 0; pi < np && ci < nc;) {
         uint32_t ps = pb[po[pi]].sig, cs = cb[co[ci]].sig;
         if (ps != cs) {
@@ -379,6 +413,8 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
         if (pe - pi == 1 && ce - ci == 1) {
             const Block *a = &pb[po[pi]], *b = &cb[co[ci]];
             float scale = fmaxf(fabsf(a->cw), fabsf(b->cw)) + 4096.0f;
+            uniq++;
+            if (block_distance(a, b) > (fabsf(b->cw) + 4096.0f) * 0.3f) jumped++;
             if (block_distance(a, b) <= scale) {
                 pair_blocks(pb, cb, co[ci], po[pi]);
                 s_anchors[na++] = (Anchor) {b->cx, b->cy, b->cw, b->cx - a->cx, b->cy - a->cy, b->cw - a->cw};
@@ -386,6 +422,13 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
         }
         pi = pe;
         ci = ce;
+    }
+
+    // A camera cut (the course intros change shots): most single pieces jumped. Nothing is interpolated then, or
+    // the frame would show everything half way between two shots.
+    if (uniq >= 8 && jumped * 2 > uniq) {
+        for (uint32_t i = 0; i < f->polygon_count; i++) s_match[i] = -1;
+        return;
     }
 
     // Identical blocks.
@@ -438,8 +481,9 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
             const Pair *q = &s_pairs[i];
             if (used_c[q->c - ci] || used_p[q->p]) continue;
             const Block *a = &pb[po[q->p]], *b = &cb[co[q->c]];
-            // A cut, or a piece that came or went: too far from where it should have been.
-            if (q->d > fmaxf(fabsf(a->cw), fabsf(b->cw)) * 0.25f + 2048.0f) continue;
+            // A cut, or a piece that came or went: too far from where it should have been (as for single pieces;
+            // the pairs nearest to their prediction are taken first).
+            if (q->d > fmaxf(fabsf(a->cw), fabsf(b->cw)) * 0.5f + 4096.0f) continue;
             used_c[q->c - ci] = 1;
             used_p[q->p] = 1;
             pair_blocks(pb, cb, co[q->c], po[q->p]);
@@ -469,7 +513,13 @@ static void push_polygon(const Gx3dFrame *f, const GxPolygon *p, Vertex **out, G
     for (int k = 0; k < p->count; k++) {
         const GxVertex *g = &f->vertices[p->first + k];
         float x = (float) g->x, y = (float) g->y, z = (float) g->z, w = (float) g->w;
-        if (pp) {
+        if (pp && s_rigid[p - f->polygons].on) {
+            const Rigid *r = &s_rigid[p - f->polygons];
+            x += r->dx * (1.0f - t);
+            y += r->dy * (1.0f - t);
+            z += r->dz * (1.0f - t);
+            w += r->dw * (1.0f - t);
+        } else if (pp) {
             const GxVertex *o = &prev->vertices[pp->first + k];
             x = o->x + (x - o->x) * t;
             y = o->y + (y - o->y) * t;

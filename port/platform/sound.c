@@ -32,6 +32,15 @@
 static void *s_lock;
 static const bool s_debug = false; // log notes and sequences
 bool g_snd_keyon_log;                // tests: log each note's channel registers (compared with a reference)
+bool g_snd_chlog;                    // tests: log every active channel once per video frame
+
+// Output effect. The game captures the mixer's output (capture units, channels 1 and 3 replay it) and processes it
+// on the ARM9 (NNS_SndCaptureStartOutputEffect: surround by default, headphones or mono from the options), and the
+// surround also lowers the channels panned to the sides (SNDi_SetSurroundDecay). Here the same processing is applied
+// to the output directly, the type read from the game's state.
+#include "capture_output_effect.h"
+extern CallbackInfo sCallbackInfo;
+static int s_surround_decay;
 static void snd_lock(void) {
     if (!s_lock) s_lock = hapi_mutex_new();
     hapi_mutex_lock(s_lock);
@@ -103,6 +112,7 @@ typedef struct Channel {
     int key, base_key, velocity;
     int pitch_offset; // 1/64 semitone
     int sweep_pitch, sweep_length, sweep_counter;
+    uint64_t chlog_frame;
     int env_state, env_level;
     int attack, decay, sustain, release;
     int length; // remaining ticks of the note, -1 = until released
@@ -734,9 +744,13 @@ static void player_tick(int p) {
         }
         any = true;
     }
-    // Note lengths count down in ticks.
+    // Note lengths count down in ticks, and so do the sweeps (portamento) of sequenced notes.
     for (int i = 0; i < CHANNELS; i++) {
         Channel *c = &s_ch[i];
+        if (c->active && c->sequenced && c->track >= 0 && s_tracks[c->track].player == p &&
+            c->sweep_counter < c->sweep_length) {
+            c->sweep_counter++;
+        }
         if (c->active && c->sequenced && c->track >= 0 && s_tracks[c->track].player == p && c->length > 0) {
             if (--c->length == 0) {
                 c->env_state = ENV_RELEASE;
@@ -808,8 +822,8 @@ static void update_channel_params(Channel *c) {
     pan += c->user_pan;
     // Sweep / portamento.
     if (c->sweep_pitch && c->sweep_length > 0 && c->sweep_counter < c->sweep_length) {
-        pitch += c->sweep_pitch * (c->sweep_length - c->sweep_counter) / c->sweep_length;
-        c->sweep_counter++;
+        pitch += (int) ((int64_t) c->sweep_pitch * (c->sweep_length - c->sweep_counter) / c->sweep_length);
+        if (!c->sequenced) c->sweep_counter++; // the others sweep per driver frame
     }
     // LFO: the parameters follow the track, the counters are the channel's.
     Lfo *l = &c->lfo;
@@ -846,9 +860,22 @@ static void update_channel_params(Channel *c) {
     if (pan > 63) pan = 63;
     // The mixer pans linearly: left (128 - pan) / 128, right pan / 128, pan 0..127.
     float p = (float) (pan + 64);
+    int ci = (int) (c - s_ch);
+    if (s_surround_decay > 0 && ci != 1 && ci != 3) {
+        // The ARM7's CalcSurroundDecay on the channel volume (0x7fff << 6 is about 1 << 21).
+        int pn = pan + 64, d = s_surround_decay;
+        if (pn < 24) gain *= (float) ((int64_t) d * (pn + 40) + ((int64_t) (0x7fff - d) << 6)) / 2097152.0f;
+        else if (pn > 104) gain *= (float) (-(int64_t) d * (pn - 40) + ((int64_t) (d + 0x7fff) << 6)) / 2097152.0f;
+    }
     c->gain_l = gain * (128 - p) / 128.0f;
     c->gain_r = gain * p / 128.0f;
     double rate = rate_for(c->base_timer, pitch);
+    if (g_snd_chlog && c->chlog_frame != g_frame_count) {
+        c->chlog_frame = g_frame_count;
+        double period = c->base_timer * pow(2.0, -pitch / 768.0);
+        port_log("chlog %llu ch%d src %07x tmr %04x db %d pan %d", (unsigned long long) g_frame_count, (int) (c - s_ch),
+                 (unsigned) (uintptr_t) (c->data ? c->data : 0), (unsigned) (0x10000 - (int) period), db, pan + 64);
+    }
     if (g_snd_keyon_log && !c->logged) {
         c->logged = true;
         double period = c->base_timer * pow(2.0, -pitch / 768.0);
@@ -889,6 +916,45 @@ static void driver_frame(void) {
 }
 
 // ------------------------------------------------------------------------------------------------ mixing
+// The capture runs at 32000 Hz: its delays (2 samples for the surround, 24 for the headphones) at the output rate.
+static float s_fx_hist[2][64];
+static int s_fx_pos;
+
+static inline float clamp16(float v) { return v > 32767 ? 32767 : v < -32768 ? -32768 : v; }
+
+static void output_effect(float *l, float *r, int rate) {
+    int type = sCallbackInfo.mType;
+    float L = clamp16(*l), R = clamp16(*r);
+    int at = s_fx_pos;
+    s_fx_pos = (s_fx_pos + 1) & 63;
+    switch (type) {
+    case SOUND_OUTPUT_EFFECT_SURROUND: { // L + (L - R) two samples before, R - the same
+        int d = (2 * rate + 16000) / 32000;
+        if (d < 1) d = 1;
+        float diff = s_fx_hist[0][(at - d) & 63];
+        s_fx_hist[0][at] = clamp16(L - R);
+        *l = clamp16(L + diff);
+        *r = clamp16(R - diff);
+        break;
+    }
+    case SOUND_OUTPUT_EFFECT_HEADPHONE: { // each side gets a quarter of the other, 24 samples before
+        int d = (24 * rate + 16000) / 32000;
+        if (d > 63) d = 63;
+        float nl = L + s_fx_hist[1][(at - d) & 63], nr = R + s_fx_hist[0][(at - d) & 63];
+        s_fx_hist[0][at] = nl / 4;
+        s_fx_hist[1][at] = nr / 4;
+        *l = clamp16(nl);
+        *r = clamp16(nr);
+        break;
+    }
+    case SOUND_OUTPUT_EFFECT_MONO:
+        *l = *r = (L + R) / 2;
+        break;
+    default:
+        break;
+    }
+}
+
 void port_snd_render(int16_t *out, int frames, int rate) {
     snd_lock();
     s_output_rate = rate;
@@ -920,6 +986,7 @@ void port_snd_render(int16_t *out, int frames, int rate) {
                 }
             }
         }
+        output_effect(&l, &r, rate);
         out[n * 2] = (int16_t) (l > 32767 ? 32767 : l < -32768 ? -32768 : l);
         out[n * 2 + 1] = (int16_t) (r > 32767 ? 32767 : r < -32768 ? -32768 : r);
     }
@@ -1136,6 +1203,7 @@ static void run_command(const SNDCommand *cmd) {
         for (int i = 0; i < CHANNELS; i++)
             if (a[0] & (1u << i)) s_ch[i].direct_pan = (int) a[1];
         break;
+    case 0x16: s_surround_decay = (int) a[0]; break;
     case 0x17: s_master_volume = (int) a[0]; break;
     case 0x1a: s_locked_channels |= a[0]; break;
     case 0x1b: s_locked_channels &= ~a[0]; break;
