@@ -3,11 +3,14 @@
 
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
 
-    <!-- Local wireless play over the Wi-Fi network -->
+    <!-- Wireless play over the Wi-Fi network, or online through a relay server -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Voice chat in online play (asked for when it is turned on) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
         android:label="Mario Kart DS"

@@ -33,8 +33,36 @@ final class Native {
     /** The console language (before start): 1 English, 2 French, 3 German, 4 Italian, 5 Spanish. */
     static native void setLanguage(int language);
 
+    /** The player's name in multiplayer and races, 10 characters at most; empty for the save file's nickname. */
+    static native void setPlayerName(String name);
+
+    /** The game's volume, 0 to 100 percent (the voice chat keeps its own). */
+    static native void setGameVolume(int percent);
+
     /** Whether the game is showing a race (the layout depends on it). */
     static native boolean isRace();
+
+    // Meta Quest build only (port/platform/android/xr.c).
+    /** Starts showing the game in the headset (an OpenXR session for the activity). */
+    static native void xrStart(android.app.Activity activity);
+
+    static native void xrStop();
+
+    /** 0 not running, 1 starting, 2 showing the game, -1 failed (xrError says why). */
+    static native int xrState();
+
+    static native String xrError();
+
+    /** How often the microphone button of the controller has been pressed. */
+    static native int xrMicToggles();
+
+    /** How often the player has asked for the settings (a trigger pulled on the status line). */
+    static native int xrSettingsRequests();
+
+    /** The status line shown next to the game: STATUS_WIDTH x STATUS_HEIGHT ARGB pixels. */
+    static native void xrSetStatus(int[] pixels);
+
+    static final int XR_STATUS_WIDTH = 880, XR_STATUS_HEIGHT = 120;
 
     private Native() {}
 }

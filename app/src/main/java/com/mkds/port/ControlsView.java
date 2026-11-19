@@ -19,7 +19,8 @@ import android.view.View;
  *  - left half: a floating stick that appears where the thumb lands and stays with that finger (the D-pad);
  *  - right side: a big A with R right above it (one thumb between them holds both: accelerate and drift), B, L (item),
  *    X and Y; a finger can slide from button to button;
- *  - top: SELECT, START and the screen swap.
+ *  - top: SELECT, START, the screen swap and, outside races, NET (the network settings: local or online play);
+ *    with voice chat on, MIC (the microphone on or off).
  * Touches on the touch screen go to the game as stylus input.
  */
 final class ControlsView extends View {
@@ -40,12 +41,20 @@ final class ControlsView extends View {
     }
 
     private static final int SWAP = 1 << 30; // not a DS button
+    private static final int NET = 1 << 29;  // not a DS button: opens the network settings
+    private static final int MIC = 1 << 28;  // not a DS button: the voice chat's microphone
+    private static final int OWN = SWAP | NET | MIC;
 
     private final Button mA = new Button(Native.A, "A"), mB = new Button(Native.B, "B"), mX = new Button(Native.X, "X"),
             mY = new Button(Native.Y, "Y"), mL = new Button(Native.L, "L"), mR = new Button(Native.R, "R"),
             mStart = new Button(Native.START, "START"), mSelect = new Button(Native.SELECT, "SELECT"),
-            mSwap = new Button(SWAP, "⇄");
-    private final Button[] mButtons = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mSwap};
+            mSwap = new Button(SWAP, "⇄"), mNet = new Button(NET, "NET"),
+            mMic = new Button(MIC, "MIC");
+    private final Button[] mButtons = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mSwap, mNet, mMic};
+    private Runnable mOnNetwork, mOnMic;
+    private boolean mOnline, mVoice, mMicOn;
+    private int mPlayers; // online in the room, this phone included; 0 = not known yet, -1 = the server is silent
+    private String mPlayerNames = ""; // the others' names
 
     // What each finger does, by pointer id.
     private static final int ROLE_BUTTONS = 0, ROLE_STICK = 1, ROLE_STYLUS = 2;
@@ -94,6 +103,8 @@ final class ControlsView extends View {
         place(mSelect, w / 2f - u * 1.3f, u * 0.4f, u * 0.38f);
         place(mStart, w / 2f + u * 1.3f, u * 0.4f, u * 0.38f);
         place(mSwap, u * 0.6f, u * 0.6f, u * 0.45f);
+        place(mNet, u * 1.75f, u * 0.6f, u * 0.45f);
+        place(mMic, u * 0.6f, u * 1.75f, u * 0.45f);
         mText.setTextSize(u * 0.42f);
         mRing.setStrokeWidth(u * 0.06f);
         invalidate();
@@ -123,6 +134,42 @@ final class ControlsView extends View {
 
     private int mPulseButtons;
     private boolean mGamepadMode; // a gamepad is connected: the on-screen buttons and stick are hidden
+
+    /** What the NET button does. */
+    void setOnNetwork(Runnable r) {
+        mOnNetwork = r;
+    }
+
+    /** Online play is set up: the NET button shows it. */
+    void setOnline(boolean online) {
+        mOnline = online;
+        invalidate();
+    }
+
+    /** How many players are online in the room (OnlinePresence): shown next to NET. */
+    void setPlayers(int players, String names) {
+        mPlayers = players;
+        mPlayerNames = names;
+        invalidate();
+    }
+
+    /** What the MIC button does. */
+    void setOnMic(Runnable r) {
+        mOnMic = r;
+    }
+
+    /** Voice chat is running (the MIC button is there), with the microphone on or off. */
+    void setVoice(boolean voice, boolean micOn) {
+        mVoice = voice;
+        mMicOn = micOn;
+        invalidate();
+    }
+
+    // The buttons of the game are hidden with a gamepad; NET is hidden during races, MIC without voice chat.
+    private boolean hidden(Button b, boolean race) {
+        if (b.bits == MIC) return !mVoice;
+        return b.bits == NET ? race : mGamepadMode && b.bits != SWAP;
+    }
 
     void setGamepadMode(boolean on) {
         mGamepadMode = on;
@@ -159,8 +206,9 @@ final class ControlsView extends View {
     // Buttons under a point: slightly larger than drawn, so that a thumb between A and R holds both.
     private int buttonsAt(float x, float y) {
         int bits = 0;
+        boolean race = Native.isRace();
         for (Button b : mButtons) {
-            if (mGamepadMode && b.bits != SWAP) continue;
+            if (hidden(b, race)) continue;
             if (b.hit(x, y, 1.25f)) bits |= b.bits;
         }
         return bits;
@@ -190,6 +238,10 @@ final class ControlsView extends View {
                 if ((bits & SWAP) != 0) {
                     mSwapped = !mSwapped;
                     applyScreens();
+                } else if ((bits & NET) != 0 && mOnNetwork != null) {
+                    mOnNetwork.run();
+                } else if ((bits & MIC) != 0 && mOnMic != null) {
+                    mOnMic.run();
                 }
             } else if (mTouchRect.width() > 0 && mTouchRect.contains(x, y)) {
                 f.role = ROLE_STYLUS;
@@ -235,7 +287,7 @@ final class ControlsView extends View {
                 mTouchY = clamp((int) ((f.y - mTouchRect.top) * 192 / mTouchRect.height()), 191);
                 break;
             default:
-                buttons |= buttonsAt(f.x, f.y) & ~SWAP;
+                buttons |= buttonsAt(f.x, f.y) & ~OWN;
                 break;
             }
         }
@@ -254,15 +306,30 @@ final class ControlsView extends View {
     @Override
     protected void onDraw(Canvas c) {
         int pressed = mTouchButtons | mPadButtons | mStickButtons;
+        boolean race = Native.isRace();
         for (Button b : mButtons) {
-            if (mGamepadMode && b.bits != SWAP) continue;
-            boolean on = b.bits != SWAP && (pressed & b.bits) == b.bits;
-            mFill.setColor(on ? 0x80ffffff : 0x38000000);
+            if (hidden(b, race)) continue;
+            boolean on = (b.bits & OWN) == 0 && (pressed & b.bits) == b.bits;
+            mFill.setColor(on ? 0x80ffffff : b.bits == NET && mOnline ? 0x7030a060
+                    : b.bits == MIC ? (mMicOn ? 0x7030a060 : 0x70a03030) : 0x38000000);
             c.drawCircle(b.x, b.y, b.r, mFill);
             c.drawCircle(b.x, b.y, b.r, mRing);
             float size = mText.getTextSize();
             if (b.label.length() > 2) mText.setTextSize(b.r * 0.55f);
             c.drawText(b.label, b.x, b.y - (mText.descent() + mText.ascent()) / 2, mText);
+            mText.setTextSize(size);
+        }
+        if (mOnline && !race && mPlayers != 0) {
+            // Next to NET: who is there.
+            float size = mText.getTextSize();
+            mText.setTextSize(mUnit * 0.32f);
+            mText.setTextAlign(Paint.Align.LEFT);
+            String text = mPlayers < 0 ? "no server" : mPlayers == 1 ? "1 online (you)" : mPlayers + " online";
+            if (mPlayers > 1 && !mPlayerNames.isEmpty()) {
+                text += ": " + (mPlayerNames.length() > 36 ? mPlayerNames.substring(0, 35) + "…" : mPlayerNames);
+            }
+            c.drawText(text, mNet.x + mNet.r * 1.3f, mNet.y - (mText.descent() + mText.ascent()) / 2, mText);
+            mText.setTextAlign(Paint.Align.CENTER);
             mText.setTextSize(size);
         }
         // The stick under the thumb.

@@ -150,6 +150,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private void startGame() {
         if (!sStarted) {
             Native.setLanguage(gameLanguage());
+            mOnline.applyVolume();
             String err = Native.start(romFile().getAbsolutePath(), new File(getFilesDir(), "mkds.sav").getAbsolutePath());
             if (err != null) {
                 new AlertDialog.Builder(this).setTitle("Mario Kart DS").setMessage(err)
@@ -157,11 +158,16 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 return;
             }
             sStarted = true;
+            mOnline.applyName();
         }
         FrameLayout root = new FrameLayout(this);
         SurfaceView surface = new SurfaceView(this);
         surface.getHolder().addCallback(this);
         mControls = new ControlsView(this);
+        mControls.setOnNetwork(mOnline::showSettings);
+        mControls.setOnline(mOnline.isOnline());
+        mControls.setOnMic(mOnline::toggleMic);
+        updateVoice();
         root.addView(surface);
         root.addView(mControls);
         mGamepad = false;
@@ -224,6 +230,42 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
+    // ------------------------------------------------------------------------------------------ online play
+    // Online play, the count of players, the voice chat and the player's name: OnlineUi.
+    private static final int ASK_MICROPHONE = OnlineUi.ASK_MICROPHONE;
+    private boolean mResumed;
+    private final OnlineUi mOnline = new OnlineUi(this, new OnlineUi.Host() {
+        @Override
+        public void onOnline(boolean online) {
+            if (mControls != null) mControls.setOnline(online);
+        }
+
+        @Override
+        public void onPlayers(int players, String names) {
+            if (mControls != null) mControls.setPlayers(players, names);
+        }
+
+        @Override
+        public void onVoice(boolean running, boolean micOn) {
+            if (mControls != null) mControls.setVoice(running, micOn);
+        }
+
+        @Override
+        public void onSettingsClosed() {
+            hideSystemBars();
+        }
+    });
+
+    private void updateVoice() {
+        mOnline.update(sStarted && mResumed);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == ASK_MICROPHONE) updateVoice(); // without the microphone: listening only
+    }
+
     // Local wireless play: the game finds other phones by broadcast on the Wi-Fi network, and its races share every
     // frame's input, so the Wi-Fi must let broadcasts in and not doze between packets.
     private android.net.wifi.WifiManager.MulticastLock mMulticastLock;
@@ -257,6 +299,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     protected void onResume() {
         super.onResume();
+        mResumed = true;
+        updateVoice();
         holdWifi(true);
         if (sStarted) Native.setPaused(false);
     }
@@ -264,6 +308,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     protected void onPause() {
         super.onPause();
+        mResumed = false;
+        updateVoice();
         holdWifi(false);
         if (sStarted) Native.setPaused(true);
     }

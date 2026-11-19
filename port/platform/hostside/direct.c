@@ -61,6 +61,10 @@ extern int g_port_aspect;
 void guest_set_aspect(int32_t fx12) { g_port_aspect = fx12; }
 extern int g_port_language;
 void guest_set_language(int language) { g_port_language = language; }
+extern uint16_t g_port_player_name[12];
+void guest_set_player_name(const uint16_t *name) {
+    __builtin_memcpy(g_port_player_name, name, PORT_PLAYER_NAME * sizeof(uint16_t));
+}
 uint64_t guest_frame_count(void) { return g_frame_count; }
 void guest_set_lockstep(void *ready, void *done) {
     g_lockstep_ready = ready;

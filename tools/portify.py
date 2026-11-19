@@ -55,6 +55,16 @@ FIXUPS = [
     ("libs/spl/src/particle_system.c",
      r"ptcl->mScale = scale \+ \(\(lifeRate - 0xff\) \* \(scale - scaleAnim->mMidScale\)\) / \(0xff - hi\);",
      "ptcl->mScale = scale + (hi == 0xff ? 0 : ((lifeRate - 0xff) * (scale - scaleAnim->mMidScale)) / (0xff - hi));", 1),
+    # The player's name as the others see it and as the race shows it: the name of the app's network settings when
+    # one is set, else the save file's nickname (port_player_name, port/platform/os.c). The save file keeps its own.
+    ("src/Main/Net/connection.c", r"&gBackupBuffers->mFirstBlock->mPlayerName, &gConnectionWork->mPlayerRecords\[0\]",
+     "port_player_name(gBackupBuffers->mFirstBlock->mPlayerName), &gConnectionWork->mPlayerRecords[0]", 1),
+    ("src/Main/Net/connection_sharing.c", r"MI_CpuCopy8\(gBackupBuffers->mFirstBlock->mPlayerName, gConnectionWork->mChildren\.mGameInfo",
+     "MI_CpuCopy8(port_player_name(gBackupBuffers->mFirstBlock->mPlayerName), gConnectionWork->mChildren.mGameInfo", 1),
+    ("src/Main/Net/scan.c", r"MI_CpuCopy8\(&gBackupBuffers->mFirstBlock->mPlayerName, userData",
+     "MI_CpuCopy8(port_player_name(gBackupBuffers->mFirstBlock->mPlayerName), userData", 1),
+    ("src/Main/Race/race_setup_input.c", r"\*nameSlot = &gBackupBuffers->mFirstBlock->mPlayerName;",
+     "*nameSlot = port_player_name(gBackupBuffers->mFirstBlock->mPlayerName);", 1),
     # The game's entry point; `main` is the host program's.
     ("src/Main/System/main.c", r"^void main\(void\) \{", "void GameMain(void) {", 1),
     # VIEWPORT geometry command written by address.

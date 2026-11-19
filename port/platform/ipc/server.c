@@ -102,6 +102,7 @@ int main(int argc, char **argv) {
 
     uint32_t rate = atomic_load(&s->vblank_rate), paused = 0, input_seq = 0, flush = 0, captures = 0;
     int32_t aspect = 0;
+    uint32_t name_seq = 0;
     guest_set_vblank_rate(rate);
     if (atomic_load(&s->language)) guest_set_language(atomic_load(&s->language));
     if (atomic_load(&s->aspect)) guest_set_aspect(atomic_load(&s->aspect));
@@ -139,6 +140,13 @@ int main(int argc, char **argv) {
             atomic_store(&s->flush_ack, flush = req);
         }
 
+        uint32_t ns = atomic_load(&s->player_name_seq);
+        if (ns != name_seq) {
+            name_seq = ns;
+            uint16_t name[PORT_PLAYER_NAME];
+            memcpy(name, s->player_name, sizeof(name));
+            guest_set_player_name(name);
+        }
         int32_t a = atomic_load(&s->aspect);
         if (a && a != aspect) guest_set_aspect(aspect = a);
         uint32_t c = atomic_load(&s->captures);

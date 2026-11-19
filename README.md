@@ -15,6 +15,7 @@ DS hardware replaced by a native platform layer (OpenGL ES 3 graphics, native so
 - Touch controls designed for phones, with a floating stick
 - Gamepad support (USB and Bluetooth); on-screen controls hide automatically
 - Local multiplayer over Wi-Fi between phones running the app (Multi-Card Play)
+- Online multiplayer: the same Multi-Card Play over the internet, through a small relay server you can host yourself
 - Game language follows the phone's language (English, French, German, Italian, Spanish)
 
 ## Requirements
@@ -38,6 +39,8 @@ DS hardware replaced by a native platform layer (OpenGL ES 3 graphics, native so
 | **X**, **Y** | As on the DS |
 | **SELECT**, **START** | As on the DS |
 | ⇄ | Swap the screens: the touch screen becomes large, for menus |
+| **MIC** (with voice chat) | Microphone on / off |
+| **NET** (outside races) | Network settings: local or online play |
 | Touch screen (inset) | Stylus input |
 
 The Android back gesture pauses the game during a race and does nothing elsewhere.
@@ -54,6 +57,61 @@ disconnects during a race, the game pauses and the touch controls come back. L2/
 Races share every frame's input in lockstep, as on the DS: a stable Wi-Fi connection gives the smoothest play.
 DS Download Play is not supported (every player needs the app and the game).
 
+## Online multiplayer
+Online play is Multi-Card Play with the phones in different places: up to eight players, every mode of the
+multiplayer menu, each with the app and the game. It is not Nintendo Wi-Fi Connection (no friend codes, no
+matchmaking with strangers): players meet in a room they agree on.
+
+1. Someone runs the relay server on a machine with a public IPv4 address and an open UDP port (23536 by default).
+   It needs only Python 3:
+   ```shell
+   python3 tools/relay_server.py
+   ```
+2. Every player touches **NET**, ticks **Play online**, and enters the server's address and the same room code.
+   **Test** tells whether the server answers and who is in the room.
+3. Then as in local play: one player creates the group in **Multiplayer → Multi-Card Play**, the others select it.
+
+Next to **NET**, the game shows how many players are online in your room right now (everyone who has the game open
+with the same server and room code, you included) and their names, or "no server" when the relay does not answer.
+Enter your own name in the network settings (**Your name**). It is the name on this list, and its first ten
+characters are your name in multiplayer and in races, in place of the nickname of your save file (which is kept:
+clear the field to use it again). The game's font has the Latin letters; other characters show as "?".
+
+**NET** turns green while online play is set up; untick the box to play on the local Wi-Fi again. A change applies
+the next time the multiplayer menu is entered.
+
+**Voice chat**: tick **Voice chat** in the same settings and allow the microphone. Everyone in the room who has it
+on hears each other, in the menus and in races; the **Game volume** slider there turns the game down so that the
+voices stand out; **MIC** (green: on, red: off) mutes your microphone. Only speech is
+sent, through the relay server. Headphones are best: with the loudspeaker the others may hear the game and
+themselves.
+
+The server only introduces the phones and passes their packets on. Phones that can reach each other directly (most
+home routers allow it) leave it out after the first second, so the delay is that of the players' own connections.
+
+Every player plays the same frames from the same inputs, as on the DS, so races stay exact. The DS waits for every
+player's input before each frame, which only works when the players are a millisecond apart; online, the host keeps
+the race at full speed and the other players' inputs take effect a little later instead (by about the time a packet
+needs to go to the host and back, so their steering feels delayed on slow connections). A late packet shows as a
+single skipped frame. The host plays without delay: the player with the best connection should create the group.
+Every player needs the same version of the app.
+
+## Meta Quest (VR)
+A second app, built from the same sources, shows the game on a large screen in VR through OpenXR (Quest 2, Pro, 3
+and 3S). It installs next to the phone app, with its own save file.
+
+- The app opens in VR: the top screen straight ahead in widescreen, the touch screen to its right, and under it a
+  line that tells who is online and whether your microphone is on.
+- Point a controller at that line and pull its trigger for the settings panel: choose the ROM (the panel opens by
+  itself the first time) and set up the network (online play, voice chat, your name, the game's volume: the same
+  settings as on a phone).
+- Controllers: left stick steers; **A** accelerate, **B** brake; right trigger or grip **R** (drift), left trigger or
+  grip **L** (item); **X**, **Y** as on the DS; the menu button is START, a click of the right stick SELECT. Point a
+  controller at the touch screen and pull its trigger to touch it. A click of the left stick turns the microphone on
+  and off.
+
+Build it with `./gradlew assembleQuestRelease` (the phone app: `assemblePhoneRelease`).
+
 ## Building
 Clone with the decompilation submodule:
 ```shell
@@ -67,7 +125,7 @@ Requirements:
 ```shell
 ./gradlew assembleRelease
 ```
-The APK is written to `app/build/outputs/apk/release/`. The GitHub Actions workflow
+The APKs are written to `app/build/outputs/apk/phone/release/` and `app/build/outputs/apk/quest/release/`. The GitHub Actions workflow
 (`.github/workflows/android.yml`) builds it on every push.
 
 ### Linux test build
@@ -84,8 +142,9 @@ build/host/mkds rom.nds --frames 1800 --dump-every 100 --out frames --press 330:
 | `decomp/` | The decompilation (submodule) |
 | `tools/portify.py` | Prepares the decompiled sources for the port (a few documented fixups) |
 | `port/platform/` | DS platform layer: memory map, OS, 2D and 3D graphics, sound driver, wireless, file system from the ROM |
+| `tools/relay_server.py` | The relay server for online play |
 | `port/guest/` | 64-bit ARM: the game runs as a 32-bit-pointer image in its own process |
-| `app/` | Android application |
+| `app/` | Android application (`src/quest`: the Meta Quest panel and VR activity; `port/platform/android/xr.c`: OpenXR) |
 
 - **CPU**: the game assumes 32-bit pointers. On 32-bit ARM it runs as is; on 64-bit ARM it is compiled with GCC's
   ILP32 AArch64 target and runs in a separate process, where the DS address space is free.
@@ -93,7 +152,8 @@ build/host/mkds rom.nds --frames 1800 --dump-every 100 --out frames --press 330:
   resolution. The 2D engines are rendered in software, wider than the DS screen for widescreen.
 - **Sound**: the DS sound driver (the ARM7 side) is reimplemented natively and mixes into Android's audio output.
 - **Wireless**: the game's own wireless library runs unchanged; its ARM7 side is reimplemented over UDP on the local
-  network.
+  network. Online, the same datagrams go through the relay server or, once the phones have found each other,
+  directly between them (`port/platform/hostside/online.h`).
 
 ## Legal
 This project contains no Nintendo code or assets. *Mario Kart DS* and Nintendo DS are trademarks of Nintendo.

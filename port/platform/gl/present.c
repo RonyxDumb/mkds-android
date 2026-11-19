@@ -233,6 +233,9 @@ static void fit(const int *r, float aspect, int *out) {
 
 bool present_engine_a_on_top(void) { return s_shown.a_on_top; }
 
+static GLuint s_target; // the framebuffer present_draw draws into (0: the window)
+void present_set_target(uint32_t framebuffer) { s_target = framebuffer; }
+
 void present_draw(const int layout[8], int w, int h, float t) {
     GLuint tex3d = 0;
     // The 3D layer is as wide as the 2D of its screen (widescreen on the top screen).
@@ -242,7 +245,7 @@ void present_draw(const int layout[8], int w, int h, float t) {
         tex3d = gl3d_render(&s_frames3d[s_cur3d], s_have_prev ? &s_frames3d[s_cur3d ^ 1] : NULL, t, s_shown.snap,
                             s_shown.scale, wide);
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_target);
     glViewport(0, 0, w, h);
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);

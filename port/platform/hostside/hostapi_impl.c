@@ -178,9 +178,12 @@ bool hapi_save_write(const void *data, uint32_t size) {
 #include <errno.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+
+#include "online.h"
 
 #define NET_BEACON_PORT 23535
 // Pointers from the guest: 32-bit values (only the low half of the registers is defined in the arm64 build).
@@ -199,6 +202,8 @@ static struct {
     ssize_t (*recvfrom)(int, void *, size_t, int, struct sockaddr *, socklen_t *);
     int (*getifaddrs)(struct ifaddrs **);
     void (*freeifaddrs)(struct ifaddrs *);
+    int (*getaddrinfo)(const char *, const char *, const struct addrinfo *, struct addrinfo **);
+    void (*freeaddrinfo)(struct addrinfo *);
 } libc_net;
 
 static bool libc_net_load(void) {
@@ -216,6 +221,9 @@ static bool libc_net_load(void) {
     libc_net.recvfrom = (ssize_t (*)(int, void *, size_t, int, struct sockaddr *, socklen_t *)) dlsym(libc, "recvfrom");
     libc_net.getifaddrs = (int (*)(struct ifaddrs **)) dlsym(libc, "getifaddrs");
     libc_net.freeifaddrs = (void (*)(struct ifaddrs *)) dlsym(libc, "freeifaddrs");
+    libc_net.getaddrinfo =
+        (int (*)(const char *, const char *, const struct addrinfo *, struct addrinfo **)) dlsym(libc, "getaddrinfo");
+    libc_net.freeaddrinfo = (void (*)(struct addrinfo *)) dlsym(libc, "freeaddrinfo");
     return libc_net.socket && libc_net.bind && libc_net.setsockopt && libc_net.sendto && libc_net.recvfrom;
 }
 
@@ -240,12 +248,33 @@ static int udp_socket(uint16_t port, bool reuse) {
     return fd;
 }
 
+// Online play (online.h) is set up in "<save file>.online": one line, "host port room", written by the app's network
+// settings; no file or an empty one is local play. The test build takes it from MKDS_ONLINE ("host port room").
+// Read each time the wireless starts, so a change applies the next time the game's multiplayer menu is entered.
+static void online_load_config(void) {
+    char line[256] = "";
+    char path[600];
+    snprintf(path, sizeof(path), "%s.online", s_save_path[0] ? s_save_path : "mkds");
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        if (!fgets(line, sizeof(line), f)) line[0] = 0;
+        fclose(f);
+    }
+#ifndef __ANDROID__
+    if (getenv("MKDS_ONLINE")) snprintf(line, sizeof(line), "%s", getenv("MKDS_ONLINE"));
+#endif
+    line[strcspn(line, "\r\n")] = 0;
+    OnlineLibc libc = {libc_net.sendto, libc_net.getaddrinfo, libc_net.freeaddrinfo};
+    online_configure(&libc, line);
+}
+
 bool hapi_net_open(void) {
-    if (s_sock >= 0) return true;
     if (!libc_net_load()) {
         port_log("net: no socket functions");
         return false;
     }
+    online_load_config();
+    if (s_sock >= 0) return true;
     s_sock = udp_socket(0, false);
     s_beacon_sock = udp_socket(NET_BEACON_PORT, true);
     if (s_sock < 0) {
@@ -360,6 +389,10 @@ void hapi_net_send(const HostNetAddr *to, const void *data, uint32_t size) {
     data = GUEST_PTR(data);
     if (s_sock < 0) return;
     sim_flush();
+    if (online_enabled()) {
+        online_send(s_sock, to, data, size);
+        return;
+    }
     if (to) {
         if (!sim_send(to->ip, to->port, data, size)) send_to(to->ip, (uint16_t) to->port, data, size);
         return;
@@ -384,6 +417,28 @@ int32_t hapi_net_recv(void *data, uint32_t capacity, HostNetAddr *from) {
     data = GUEST_PTR(data);
     from = GUEST_PTR(from);
     sim_flush();
+    if (online_enabled() && s_sock >= 0) {
+        // Online: everything comes in on the main socket, from the server or directly from a station it introduced.
+        // The local network's beacons are read and dropped.
+        online_tick(s_sock);
+        struct sockaddr_in a;
+        socklen_t len = sizeof(a);
+        for (int i = 0; i < 16 && s_beacon_sock >= 0; i++) {
+            if (libc_net.recvfrom(s_beacon_sock, data, capacity, 0, (struct sockaddr *) &a, &len) < 0) break;
+            len = sizeof(a);
+        }
+        for (int i = 0; i < 16; i++) {
+            len = sizeof(a);
+            ssize_t n = libc_net.recvfrom(s_sock, data, capacity, 0, (struct sockaddr *) &a, &len);
+            if (n < 0) return -1;
+            HostNetAddr src = {a.sin_addr.s_addr, ntohs(a.sin_port)};
+            int32_t size = online_receive(s_sock, data, (int32_t) n, &src);
+            if (size < 0) continue;
+            if (from) *from = src;
+            return size;
+        }
+        return -1;
+    }
     int socks[2] = {s_sock, s_beacon_sock};
     for (int i = 0; i < 2; i++) {
         if (socks[i] < 0) continue;

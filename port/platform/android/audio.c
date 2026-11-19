@@ -8,10 +8,22 @@
 
 static AAudioStream *s_stream;
 static int s_rate = 48000;
+static volatile int s_volume = 256; // the game's volume, 0..256 (the network settings: lower, to hear the voice chat)
+
+void android_audio_set_volume(int percent) {
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    s_volume = percent * 256 / 100;
+}
 
 static aaudio_data_callback_result_t callback(AAudioStream *stream, void *user, void *data, int32_t frames) {
     (void) stream, (void) user;
     guest_snd_render(data, frames, s_rate);
+    int volume = s_volume;
+    if (volume < 256) {
+        int16_t *samples = data;
+        for (int32_t i = 0; i < frames * 2; i++) samples[i] = (int16_t) ((samples[i] * volume) >> 8);
+    }
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 

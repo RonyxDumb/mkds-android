@@ -90,7 +90,7 @@ if (GUEST_SPLIT)
     set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/guest_image.S PROPERTIES
         OBJECT_DEPENDS ${GUEST_DIR}/guest.elf)
     enable_language(ASM)
-    set(GAME_SIDE_SOURCES ${P}/hostside/memory.c ${P}/hostside/hostapi_impl.c ${P}/hostside/bridge.c
+    set(GAME_SIDE_SOURCES ${P}/hostside/memory.c ${P}/hostside/hostapi_impl.c ${P}/hostside/online.c ${P}/hostside/bridge.c
         ${CMAKE_CURRENT_BINARY_DIR}/guest_image.S)
 else()
     # One image: the game and the whole platform layer.
@@ -118,11 +118,19 @@ function(port_link_game T)
     endif()
 endfunction()
 
+option(QUEST "Android: the Meta Quest build (the game on a screen in the headset, through OpenXR)" OFF)
+
 if (ANDROID AND GUEST_SPLIT)
     # arm64: the app library (Android side, renderers) and the game process (ipc/ipc.h).
     add_library(mkds SHARED ${ANDROID_SOURCES} ${GL_SOURCES} ${RENDER_SOURCES} ${P}/ipc/client.c)
     target_compile_definitions(mkds PRIVATE PORT_IPC)
     target_link_libraries(mkds PRIVATE android log EGL GLESv3 aaudio m dl)
+    if (QUEST)
+        # The OpenXR loader comes with the app (the Khronos loader for Android, a Gradle dependency).
+        find_package(OpenXR REQUIRED CONFIG)
+        target_compile_definitions(mkds PRIVATE PORT_QUEST)
+        target_link_libraries(mkds PRIVATE OpenXR::openxr_loader)
+    endif()
     port_target(mkds)
     # An executable, named like a library so that it is installed with them (and may be run from there).
     add_executable(mkdsgame ${GAME_SIDE_SOURCES} ${P}/ipc/server.c ${P}/android/crash.c)

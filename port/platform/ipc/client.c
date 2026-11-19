@@ -199,6 +199,11 @@ void guest_set_paused(bool paused) {
 void guest_set_language(int language) {
     if (s) atomic_store(&s->language, language);
 }
+void guest_set_player_name(const uint16_t *name) {
+    if (!s) return;
+    memcpy(s->player_name, name, sizeof(s->player_name));
+    atomic_fetch_add(&s->player_name_seq, 1);
+}
 void guest_set_aspect(int32_t fx12) {
     if (s) atomic_store(&s->aspect, fx12);
 }

@@ -688,6 +688,18 @@ void VBlankIntrWait(void) { OS_WaitIrq(1, 1); }
 // it from the phone's language before the game starts.
 int g_port_language = 1;
 
+// The player's name for multiplayer and races, when the app's network settings give one (10 characters, UTF-16, as
+// the save file's nickname; the host writes it, at any time). The game takes its name through port_player_name
+// where it tells it to other players and where it sets up a race (tools/portify.py).
+u16 g_port_player_name[12];
+
+void *port_player_name(void *saved) {
+    static u16 name[10];
+    if (!g_port_player_name[0]) return saved;
+    memcpy(name, g_port_player_name, sizeof(name));
+    return name;
+}
+
 // The owner information the DS firmware keeps: a fresh console in the chosen language.
 void OS_GetOwnerInfo(OwnerInfo *info) {
     static const char name[] = "Player";

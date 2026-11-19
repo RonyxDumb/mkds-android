@@ -31,4 +31,5 @@ typedef struct GuestHeader {
     uint32_t lockstep_done;  // void **
     uint32_t aspect;         // int32_t *: race camera aspect ratio, 20.12 fixed point
     uint32_t language;       // int32_t *: the console language (OS_GetOwnerInfo), set before the start
+    uint32_t player_name;    // uint16_t[12] *: the player's name for multiplayer and races (empty: the save file's)
 } GuestHeader;

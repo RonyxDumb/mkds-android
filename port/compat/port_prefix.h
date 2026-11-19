@@ -3,6 +3,7 @@
 #pragma once
 #define PLATFORM_PORT
 extern int g_port_aspect; // race camera aspect ratio (platform/frame.c) 1
+extern void *port_player_name(void *saved); // the player's name for races and other players (platform/os.c)
 
 
 /* mwcc intrinsics */

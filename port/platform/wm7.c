@@ -12,6 +12,10 @@
 //    is what the MP protocol guarantees on the DS; a send is done when every destination acknowledged it;
 //  - acknowledgements double as keep-alives; a station not heard for a few seconds is disconnected.
 // Messages are delivered from the interrupt points of the OS (port_wm7_poll), like the ARM7's FIFO interrupts.
+//
+// Online play uses the same datagrams: the host side carries them through a relay server instead of the local
+// network (hostside/online.h), and a broadcast reaches the stations of the room. Nothing here knows the difference,
+// except that the timers follow the measured round trip time, which is no longer a millisecond.
 #include "port.h"
 #include "hostapi.h"
 
@@ -26,7 +30,7 @@
 
 // ------------------------------------------------------------------------------------------------ wire format
 #define NET_MAGIC 0x57444b4du // "MKDW"
-#define NET_VERSION 1
+#define NET_VERSION 2 // 2: data sharing over slow links (every station must do it the same way)
 
 enum {
     PKT_BEACON = 1, // parent -> everyone: BeaconBody
@@ -72,7 +76,15 @@ typedef struct DataBody {
 
 typedef struct AckBody {
     u32 next; // every packet before this one arrived
+    // Not in the first versions, which send and read only `next`: the data packet this answers, for the round trip
+    // time.
+    u32 echo_seq;
+    u8 echo; // ACK_ECHO_*
+    u8 reserved[3];
 } AckBody;
+
+#define ACK_SIZE_V1 4
+enum { ACK_ECHO_NONE, ACK_ECHO_FIRST, ACK_ECHO_RESENT }; // a keep-alive; answers a first copy; answers a resent copy
 
 #define DATA_HEADER_SIZE (sizeof(DataBody) - 0x200)
 
@@ -82,7 +94,8 @@ typedef struct AckBody {
 #define MAX_PARENTS 8     // parents heard while scanning
 #define MAX_SENDS 64      // port sends waiting for their acknowledgements
 #define MAX_HELD 64       // received port data waiting for its port callback
-#define RESEND_NS 20000000ull
+#define RESEND_NS 20000000ull     // on the local network; longer with the round trip time (resend_after)
+#define RESEND_MAX_NS 400000000ull
 #define KEEPALIVE_NS 100000000ull
 #define LINK_TIMEOUT_NS 5000000000ull
 #define BEACON_NS 100000000ull
@@ -90,6 +103,13 @@ typedef struct AckBody {
 #define JOIN_RETRY_NS 200000000ull
 #define JOIN_TIMEOUT_NS 3000000000ull
 #define HELD_TIMEOUT_NS 3000000000ull
+
+#define DS_FIFO 32
+#define DS_RECORD_MAX 0x80
+typedef struct DsRecord {
+    u16 port, mp_seq, size;
+    u8 data[DS_RECORD_MAX];
+} DsRecord;
 
 typedef struct OutPacket {
     u64 first_ns; // first sent
@@ -109,6 +129,14 @@ typedef struct Link {
     u32 recv_next;
     bool mp_ready;  // a child that started MP
     int64_t srtt_ns; // smoothed round trip time, -1 = none yet
+    // A parent's data sharing with this child (see "data sharing over slow links").
+    struct DsRecord *ds_fifo; // DS_FIFO records the library has no place for yet
+    int ds_head, ds_count;
+    u64 ds_heard_ns, ds_sent_ns; // the child's last record; the last data set sent to it
+    int ds_surplus;              // frames in a row with records waiting
+    int ds_out;                  // data sets sent to the child that it has not answered with a record yet
+    u8 ds_last[DS_RECORD_MAX];   // the last record given to the library
+    u16 ds_last_size;
 } Link;
 
 typedef struct Parent { // a parent heard while scanning
@@ -236,6 +264,18 @@ int64_t port_os_vblank_phase_ns(void);
 int64_t port_os_vblank_period_ns(void);
 void port_os_shift_vblank(int64_t ns);
 
+// How long a packet may stay unacknowledged before it is sent again: 20 ms on the local network, where the round
+// trip takes a millisecond; one and a half round trips when they take longer (online), so that packets that are
+// only on their way are not all sent twice.
+static u64 resend_after(const Link *l) {
+    u64 t = RESEND_NS;
+    if (l->srtt_ns > 0) {
+        u64 rtt = (u64) l->srtt_ns * 3 / 2 + 5000000ull;
+        if (rtt > t) t = rtt;
+    }
+    return t > RESEND_MAX_NS ? RESEND_MAX_NS : t;
+}
+
 static void link_transmit(Link *l, u32 seq, u64 now) {
     OutPacket *p = &l->out[seq % OUT_SLOTS];
     hapi_net_send(&l->addr, p->bytes, p->size);
@@ -268,7 +308,7 @@ static bool link_push(Link *l, u8 kind, u16 port, u16 mp_seq, const void *data, 
     u64 now = now_ns();
     p->first_ns = now;
     p->resent = false;
-    if (l->send_next - l->send_acked == 1) l->resend_ns = now + RESEND_NS;
+    if (l->send_next - l->send_acked == 1) l->resend_ns = now + resend_after(l);
     // Twice: the races exchange inputs every frame in lockstep, and a lost datagram would stall them until it is
     // resent. The receiver keeps the first copy.
     link_transmit(l, seq, now);
@@ -277,8 +317,15 @@ static bool link_push(Link *l, u8 kind, u16 port, u16 mp_seq, const void *data, 
     return true;
 }
 
-static void send_ack(Link *l) {
-    AckBody a = {l->recv_next};
+// data: the data packet this acknowledges (NULL for a keep-alive).
+static void send_ack(Link *l, const DataBody *data) {
+    AckBody a;
+    memset(&a, 0, sizeof(a));
+    a.next = l->recv_next;
+    if (data) {
+        a.echo_seq = data->seq;
+        a.echo = (data->kind & DATA_RESENT) ? ACK_ECHO_RESENT : ACK_ECHO_FIRST;
+    }
     send_packet(&l->addr, PKT_ACK, own_aid(), &a, sizeof(a));
     l->sent_ns = now_ns();
 }
@@ -331,8 +378,10 @@ static void drop_sends(void) {
 static Link *link_open(u16 aid, const HostNetAddr *addr, const u8 *mac) {
     Link *l = &s_links[aid];
     OutPacket *out = l->out;
+    DsRecord *fifo = l->ds_fifo;
     memset(l, 0, sizeof(*l));
     l->out = out ? out : malloc(sizeof(OutPacket) * OUT_SLOTS);
+    l->ds_fifo = fifo ? fifo : malloc(sizeof(DsRecord) * DS_FIFO);
     l->used = true;
     l->aid = aid;
     l->addr = *addr;
@@ -451,7 +500,7 @@ static void bss_desc(const Parent *p, WMBssDesc *d) {
 
 // ------------------------------------------------------------------------------------------------ commands
 static void net_start(void) {
-    if (s_net) return;
+    // Each time the wireless starts: the host side reads the network settings again (local or online play).
     s_net = hapi_net_open();
     if (!s_held) s_held = malloc(sizeof(Held) * MAX_HELD);
 }
@@ -523,8 +572,11 @@ static int64_t wrap_phase(int64_t d, int64_t period) {
     return d;
 }
 
+static bool link_slow(const Link *l);
+static WMDataSharingInfo *ds_parent(u16 port);
+
 static void sync_to_parent(const Link *l, const DataBody *d) {
-    if (l->srtt_ns < 0) return;
+    if (l->srtt_ns < 0 || link_slow(l)) return; // a slow link: ds_child_pace sets the pace
     int64_t period = port_os_vblank_period_ns();
     int64_t parent_phase = (int64_t) d->phase * 4000 + l->srtt_ns / 2; // the parent's phase now
     int64_t err = wrap_phase(parent_phase - port_os_vblank_phase_ns() - period / 2, period);
@@ -561,16 +613,31 @@ static void port_send(const u32 *p) {
         send_done(s, s == &tmp ? WIRELESS_RESULT_SEND_BACKLOG : WIRELESS_RESULT_BAD_INPUT);
         return;
     }
-    u16 targets = s_parent ? (u16) (dest & 0xfffe) : (u16) (dest & 1);
+    u16 targets = s_parent ? (u16) (dest & 0xfffe) : (u16) (dest & 1), counted = 0;
     for (int a = 0; a < MAX_LINKS; a++) {
         if (!(targets & (1 << a)) || !s_links[a].used) continue;
         if (!link_push(&s_links[a], DATA_PORT, (u16) port, s_mp_seq, PTR(data), (u16) size, &s->link_seq[a])) {
             // Too much in flight on this link: the sender retries (data sharing does on SEND_BACKLOG).
+            for (int b = 0; b < a; b++) { // the set is not on its way to the links before this one either
+                if ((counted & (1 << b)) && s_links[b].ds_out > 0) s_links[b].ds_out--;
+            }
             s->remaining = 0;
             send_done(s, WIRELESS_RESULT_SEND_BACKLOG);
             return;
         }
         s->sent |= (u16) (1 << a);
+        if (s_parent && ds_parent((u16) port)) { // for the data sharing over slow links: a set on its way to this child
+            Link *l = &s_links[a];
+            u64 now = now_ns();
+            if (since(now, l->ds_sent_ns) > 1000000000ull) { // a new start
+                l->ds_heard_ns = now;
+                l->ds_out = 0;
+                l->ds_count = 0;
+            }
+            l->ds_sent_ns = now;
+            l->ds_out++;
+            counted |= (u16) (1 << a);
+        }
     }
     // Done at once, as an MP send is within its MP cycle on the DS: delivery is certain (resent until acknowledged),
     // and the data sharing reads its own set only after the send is done, which waiting for the acknowledgement
@@ -767,9 +834,22 @@ void port_wm7_command(u32 address) {
 }
 
 // ------------------------------------------------------------------------------------------------ receiving
-static bool port_ready(u16 port) {
+static bool port_has_callback(u16 port) {
     WMArm9Buf *w = WMi_GetSystemWork();
     return w && s_status && s_status->mMpFlag && w->mPortCallbacks[port & 15];
+}
+
+// Whether the port's callback can take data now. A child's data sharing keeps at most three unread data sets (a
+// ring of four): one more would overwrite one. On the DS no more than two are ever on their way; over a slow link
+// more are (see below), and they wait here.
+static bool port_ready(u16 port) {
+    if (!port_has_callback(port)) return false;
+    WMArm9Buf *w = WMi_GetSystemWork();
+    if (w->mPortCallbacks[port & 15] == (WirelessPortCallback) WmDataSharingReceiveCallback_Child) {
+        const WMDataSharingInfo *ds = w->mPortCallbackArgs[port & 15];
+        if (ds && ((ds->mWriteIndex - ds->mReadIndex) & 3) >= 3) return false;
+    }
+    return true;
 }
 
 static void deliver_port_data(u16 port, u16 aid, const u8 *mac, u16 mp_seq, const u8 *data, u16 size) {
@@ -788,15 +868,199 @@ static void deliver_port_data(u16 port, u16 aid, const u8 *mac, u16 mp_seq, cons
     deliver(m);
 }
 
+// ------------------------------------------------------------------------------------------------ data sharing over slow links
+// The game's races and menus run on the library's data sharing (wireless_key_data_sharing.c): every frame each child
+// sends its record (keys, touch) to the parent, the parent puts the records into a data set and sends the set to
+// everyone, and all stations play the frame from that set. A child sends a record only when it has read a set, and
+// the parent sends a set only when every record for it is there: two sets are on their way at most, so a frame takes
+// half a round trip. On the DS and on a local network the round trip is a millisecond. Online it is many frames, and
+// the game would run in slow motion.
+//
+// So over a slow link more sets are put on their way, without changing what the library and the game do with them:
+//  - Parent: when it has no set left to play and a child's record for the next one has not come by the end of the
+//    frame, the set goes out without that record. The library and the game know such sets (a station that missed a
+//    frame): every station skips that frame, the same way, and nothing is lost: the record comes later and goes into
+//    a later set. Each such set is one more on its way; after the first few the child's records arrive one per
+//    frame, each a constant number of frames late, and the game runs at full speed with the child's input delayed
+//    by the round trip. A late packet costs one more skipped frame and one more frame of delay.
+//  - Parent: records that arrive when the library has no set waiting for them are kept (the library would drop
+//    them) and handed over as sets open. When records keep waiting, the child's delay is longer than the link needs:
+//    one record that repeats the one before it is taken out, which shortens the delay by a frame.
+//  - Parent: a child that has stopped answering (loading, in the background) is waited for, as on the DS, once
+//    nothing has come from it for a while; and so is a child that reads the sets slower than they are sent (a slower
+//    device), once more sets are on their way to it than the link's delay accounts for. Otherwise the sets would
+//    pile up at the child, which would fall further and further behind.
+//  - Child: sets that arrive faster than it reads them wait (port_ready); when they pile up it runs slightly faster
+//    to catch up, and slightly slower when it runs dry.
+// Only where the game is known to skip a frame for a missing record: its own data sharing, on port 12. A skipped
+// frame's records are not played, and one byte of the game's record is a message that is sent once (the menus'
+// commands): a set that holds one is never sent short, and a record that holds one is never taken out.
+#define DS_SLOW_NS 8000000          // round trip time from which a link is slow
+#define DS_GAME_PORT 12
+#define DS_GAME_RECORD 8            // bytes in the game's record
+#define DS_GAME_MESSAGE 5           // offset of the byte that is sent once (SharingSendRecord.mSendByte)
+#define DS_DEADLINE_PERCENT 85      // of the frame: when the parent stops waiting for records
+#define DS_OUT_MAX 30               // sets on their way to a child at most (they wait in its queue of MAX_HELD)
+#define DS_SURPLUS_FRAMES 120       // records waiting for this many frames: one frame of delay is taken out
+#define DS_SURPLUS_FRAMES_DEEP 15   // the same with three or more waiting
+
+static bool link_slow(const Link *l) { return l->srtt_ns >= DS_SLOW_NS; }
+
+// The data sharing a parent runs on the port, or NULL.
+static WMDataSharingInfo *ds_parent(u16 port) {
+    WMArm9Buf *w = WMi_GetSystemWork();
+    if (!w || !s_parent || !s_status || !s_status->mMpFlag) return NULL;
+    if (w->mPortCallbacks[port & 15] != (WirelessPortCallback) WmDataSharingReceiveCallback_Parent) return NULL;
+    WMDataSharingInfo *ds = w->mPortCallbackArgs[port & 15];
+    return ds && ds->mMemberMask ? ds : NULL;
+}
+
+// Whether a set is waiting for the record of station aid (WmDataSharingReceiveData takes it; else it drops it).
+static bool ds_awaits(const WMDataSharingInfo *ds, u16 aid) {
+    u16 mask = (u16) (1 << aid), w = ds->mWriteIndex & 3;
+    if (ds->mDs[w].mAidBitmap & mask) return true;
+    return ds->mDoubleMode == 1 && (ds->mDs[(w + 1) & 3].mAidBitmap & mask);
+}
+
+// Hands the child's waiting records to the library, as far as it has sets for them.
+static void ds_pump(Link *l) {
+    while (l->ds_count) {
+        DsRecord *r = &l->ds_fifo[l->ds_head];
+        WMDataSharingInfo *ds = ds_parent(r->port);
+        if (ds && !ds_awaits(ds, l->aid)) return;
+        l->ds_head = (l->ds_head + 1) % DS_FIFO;
+        l->ds_count--;
+        if (!ds && !port_has_callback(r->port)) continue; // the data sharing has ended
+        memcpy(l->ds_last, r->data, r->size);
+        l->ds_last_size = r->size;
+        deliver_port_data(r->port, l->aid, l->mac, r->mp_seq, r->data, r->size);
+    }
+}
+
+// Port data for the ARM9: a child's record for a parent's data sharing goes through the link's queue.
+static void route_port_data(u16 port, u16 aid, const u8 *mac, u16 mp_seq, const u8 *data, u16 size) {
+    Link *l = aid < MAX_LINKS ? &s_links[aid] : NULL;
+    if (!l || !l->used || !l->ds_fifo || size > DS_RECORD_MAX || !ds_parent(port)) {
+        deliver_port_data(port, aid, mac, mp_seq, data, size);
+        return;
+    }
+    l->ds_heard_ns = now_ns();
+    if (l->ds_out > 0) l->ds_out--; // the child sends one record for each set it reads
+    if (l->ds_count == DS_FIFO) { // cannot happen while the parent stops for a silent child; keep the newest
+        l->ds_head = (l->ds_head + 1) % DS_FIFO;
+        l->ds_count--;
+    }
+    DsRecord *r = &l->ds_fifo[(l->ds_head + l->ds_count++) % DS_FIFO];
+    r->port = port;
+    r->mp_seq = mp_seq;
+    r->size = size;
+    memcpy(r->data, data, size);
+    ds_pump(l);
+}
+
+// Takes one frame out of the child's delay when its records have kept waiting: a record equal to the one before it
+// (the same keys held) is dropped, which the game cannot tell from the child having sent one record less.
+static void ds_trim(Link *l) {
+    if (!link_slow(l) || !l->ds_count) {
+        l->ds_surplus = 0;
+        return;
+    }
+    if (++l->ds_surplus < (l->ds_count >= 3 ? DS_SURPLUS_FRAMES_DEEP : DS_SURPLUS_FRAMES)) return;
+    const u8 *before = l->ds_last;
+    u16 before_size = l->ds_last_size;
+    for (int i = 0; i < l->ds_count; i++) {
+        DsRecord *r = &l->ds_fifo[(l->ds_head + i) % DS_FIFO];
+        bool message = r->size == DS_GAME_RECORD && r->data[DS_GAME_MESSAGE];
+        if (!message && r->size == before_size && !memcmp(r->data, before, r->size)) {
+            for (int j = i; j + 1 < l->ds_count; j++) {
+                l->ds_fifo[(l->ds_head + j) % DS_FIFO] = l->ds_fifo[(l->ds_head + j + 1) % DS_FIFO];
+            }
+            l->ds_count--;
+            l->ds_surplus = 0;
+            return;
+        }
+        before = r->data;
+        before_size = r->size;
+    }
+}
+
+// Parent, once a frame, shortly before its end.
+static void ds_parent_deadline(u64 now) {
+    for (int a = 1; a < MAX_LINKS; a++) {
+        if (!s_links[a].used) continue;
+        ds_pump(&s_links[a]);
+        ds_trim(&s_links[a]);
+    }
+    WMDataSharingInfo *ds = ds_parent(DS_GAME_PORT);
+    if (!ds || ds->mStatus != DATA_SHARING_STATUS_RUNNING) return;
+    if (ds->mReadIndex != ds->mSendIndex) return; // a set is ready for the next frame
+    u16 w = ds->mWriteIndex & 3, waiting = ds->mDs[w].mAidBitmap;
+    if ((waiting & 1) || !waiting) return; // the parent's own record is not in yet; or nothing is missing
+    for (int a = 1; a < MAX_LINKS; a++) {
+        if (!(waiting & (1 << a))) continue;
+        const Link *l = &s_links[a];
+        if (!l->used || !link_slow(l)) return; // a local child: wait for it, as on the DS
+        // A child that has gone silent is waited for: it would not read the sets sent meanwhile.
+        u64 window = (u64) l->srtt_ns * 2 + 200000000ull;
+        if (window > 700000000ull) window = 700000000ull;
+        if (since(now, l->ds_heard_ns) > window) return;
+        // Nor is a child that reads the sets slower than they are sent (a slower device): no more sets on their way
+        // than the link's delay accounts for, with some room. The game then runs at that child's speed, as on the DS.
+        int64_t room = 4 + l->srtt_ns * 3 / 2 / port_os_vblank_period_ns();
+        if (l->ds_out >= (room > DS_OUT_MAX ? DS_OUT_MAX : room)) return;
+    }
+    if (ds->mMemberDataSize != DS_GAME_RECORD) return;
+    u16 arrived = ds->mDs[w].mArrivedMembers;
+    for (int a = 0; a < MAX_LINKS; a++) { // a message in the set: it must be played, wait for everyone
+        if (!(arrived & (1 << a))) continue;
+        if (WmGetSharedDataAddress(ds, ds->mMemberMask, ds->mDs[w].mData, (u32) a)[DS_GAME_MESSAGE]) return;
+    }
+    // The set goes without the missing records: not waited for any more, and not marked as arrived.
+    ds->mDs[w].mAidBitmap = 0;
+    WmDataSharingSendDataSet(ds, 0);
+}
+
+// Child, once a frame: keeps the sets waiting to be read near one.
+static void ds_child_pace(void) {
+    const Link *l = &s_links[0];
+    if (!l->used || !link_slow(l)) return;
+    WMArm9Buf *w = WMi_GetSystemWork();
+    if (!w || !s_status || !s_status->mMpFlag) return;
+    for (int port = 0; port < 16; port++) {
+        if (w->mPortCallbacks[port] != (WirelessPortCallback) WmDataSharingReceiveCallback_Child) continue;
+        const WMDataSharingInfo *ds = w->mPortCallbackArgs[port];
+        if (!ds) continue;
+        int unread = ((ds->mWriteIndex - ds->mReadIndex) & 3) + s_held_count;
+        if (unread >= 3) port_os_shift_vblank(-250000); // 1.5 % faster
+        else if (unread == 0) port_os_shift_vblank(80000);
+        return;
+    }
+}
+
+// Once per frame of this console, late in the frame; or, when the game was busy then, as soon as it lets this run
+// (which is before it steps the data sharing for the next frame).
+static void ds_frame(u64 now) {
+    static u64 s_due_ns;
+    if (now < s_due_ns) return;
+    int64_t phase = port_os_vblank_phase_ns(), period = port_os_vblank_period_ns();
+    if (phase < 0) phase = 0;
+    u64 due = now - (u64) phase + (u64) (period * DS_DEADLINE_PERCENT / 100); // this frame's
+    s_due_ns = now < due ? due : due + (u64) period;
+    if (s_due_ns <= now) s_due_ns = now + (u64) period; // no VBlanks (paused)
+    if (s_parent) ds_parent_deadline(now);
+    else if (s_child) ds_child_pace();
+}
+
 // Port data that came early waits for its port callback (the receiver sets it once its MP has started).
 static void deliver_held(void) {
     u64 now = now_ns();
     while (s_held_count) {
         Held *h = &s_held[s_held_head];
         if (!port_ready(h->port)) {
-            if (since(now, h->time_ns) < HELD_TIMEOUT_NS) return;
+            // No callback yet: wait a while for it. A callback that is full: wait for it.
+            if (port_has_callback(h->port) || since(now, h->time_ns) < HELD_TIMEOUT_NS) return;
         } else {
-            deliver_port_data(h->port, h->aid, h->mac, h->mp_seq, h->data, h->size);
+            route_port_data(h->port, h->aid, h->mac, h->mp_seq, h->data, h->size);
         }
         s_held_head = (s_held_head + 1) % MAX_HELD;
         s_held_count--;
@@ -816,7 +1080,7 @@ static void receive_data(Link *l, const DataBody *d) {
     case DATA_PORT: {
         u16 size = d->size > 0x200 ? 0x200 : d->size;
         if (!s_held_count && port_ready(d->port)) {
-            deliver_port_data(d->port, l->aid, l->mac, d->mp_seq, d->data, size);
+            route_port_data(d->port, l->aid, l->mac, d->mp_seq, d->data, size);
         } else if (s_held_count < MAX_HELD) {
             Held *h = &s_held[(s_held_head + s_held_count++) % MAX_HELD];
             h->time_ns = now_ns();
@@ -964,17 +1228,27 @@ static void receive(const u8 *buf, int32_t n, const HostNetAddr *from) {
     }
     case PKT_ACK: {
         Link *l = link_of(h, from);
-        if (!l || h->length < sizeof(AckBody)) return;
+        if (!l || h->length < ACK_SIZE_V1) return;
         l->heard_ns = now;
-        u32 next = ((const AckBody *) body)->next;
-        if (next > l->send_acked && next <= l->send_next) {
-            const OutPacket *last = &l->out[(next - 1) % OUT_SLOTS];
-            if (!last->resent) {
-                int64_t rtt = (int64_t) since(now, last->first_ns);
-                l->srtt_ns = l->srtt_ns < 0 ? rtt : l->srtt_ns + (rtt - l->srtt_ns) / 8;
+        AckBody ack;
+        memset(&ack, 0, sizeof(ack));
+        memcpy(&ack, body, h->length < sizeof(ack) ? h->length : sizeof(ack));
+        u32 next = ack.next;
+        // The round trip time. An acknowledgement that names the copy it answers gives it even when the packet has
+        // been resent meanwhile (always, once the round trip is longer than the resend time); one from an older
+        // version only counts for a packet that was sent once.
+        int64_t rtt = -1;
+        if (h->length >= sizeof(AckBody)) {
+            if (ack.echo == ACK_ECHO_FIRST && ack.echo_seq < l->send_next && l->send_next - ack.echo_seq <= OUT_SLOTS) {
+                rtt = (int64_t) since(now, l->out[ack.echo_seq % OUT_SLOTS].first_ns);
             }
+        } else if (next > l->send_acked && next <= l->send_next && !l->out[(next - 1) % OUT_SLOTS].resent) {
+            rtt = (int64_t) since(now, l->out[(next - 1) % OUT_SLOTS].first_ns);
+        }
+        if (rtt >= 0) l->srtt_ns = l->srtt_ns < 0 ? rtt : l->srtt_ns + (rtt - l->srtt_ns) / 8;
+        if (next > l->send_acked && next <= l->send_next) {
             l->send_acked = next;
-            l->resend_ns = now + RESEND_NS;
+            l->resend_ns = now + resend_after(l);
             check_sends();
         }
         break;
@@ -989,7 +1263,7 @@ static void receive(const u8 *buf, int32_t n, const HostNetAddr *from) {
             if (s_child && l->aid == 0 && !(d->kind & DATA_RESENT)) sync_to_parent(l, d);
             receive_data(l, d);
         }
-        send_ack(l); // also for repeats, whose acknowledgement was lost
+        send_ack(l, d); // also for repeats, whose acknowledgement was lost
         break;
     }
     }
@@ -1043,12 +1317,13 @@ bool port_wm7_poll(void) {
                     ((DataBody *) (p->bytes + sizeof(NetHeader)))->kind |= DATA_RESENT;
                     link_transmit(l, s, now);
                 }
-                l->resend_ns = now + RESEND_NS;
+                l->resend_ns = now + resend_after(l);
             }
-            if (since(now, l->sent_ns) > KEEPALIVE_NS) send_ack(l);
+            if (since(now, l->sent_ns) > KEEPALIVE_NS) send_ack(l, NULL);
         }
     }
     deliver_held();
+    ds_frame(now);
     for (int guard = 0; s_queue_count && guard < MSG_SLOTS; guard++) {
         WirelessMessage *m = s_queue[s_queue_head];
         s_queue_head = (s_queue_head + 1) % MSG_SLOTS;

@@ -97,9 +97,7 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setLayout(JNIEnv *env, jclass c
     android_render_set_layout(rects);
 }
 
-JNIEXPORT void JNICALL Java_com_mkds_port_Native_setInput(JNIEnv *env, jclass cls, jint buttons, jboolean touching,
-                                                          jint x, jint y) {
-    (void) env, (void) cls;
+void android_set_input(int buttons, bool touching, int x, int y) {
     static PortInput *in; // in memory the guest can address (arm64 in-process bridge)
     if (!in) {
         extern void *host_low_alloc(size_t size);
@@ -107,6 +105,12 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setInput(JNIEnv *env, jclass cl
     }
     *in = (PortInput) {(uint16_t) buttons, touching, (uint16_t) x, (uint16_t) y, false};
     guest_input_set(in);
+}
+
+JNIEXPORT void JNICALL Java_com_mkds_port_Native_setInput(JNIEnv *env, jclass cls, jint buttons, jboolean touching,
+                                                          jint x, jint y) {
+    (void) env, (void) cls;
+    android_set_input(buttons, touching, x, y);
 }
 
 JNIEXPORT void JNICALL Java_com_mkds_port_Native_setPaused(JNIEnv *env, jclass cls, jboolean paused) {
@@ -131,6 +135,27 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setWideAspect(JNIEnv *env, jcla
 JNIEXPORT void JNICALL Java_com_mkds_port_Native_setLanguage(JNIEnv *env, jclass cls, jint language) {
     (void) env, (void) cls;
     guest_set_language(language);
+}
+
+// The player's name for multiplayer and races (empty: the nickname of the save file). The game's font has the
+// Latin characters; anything else becomes '?'.
+JNIEXPORT void JNICALL Java_com_mkds_port_Native_setPlayerName(JNIEnv *env, jclass cls, jstring name) {
+    (void) cls;
+    uint16_t out[PORT_PLAYER_NAME] = {0};
+    const jchar *chars = (*env)->GetStringChars(env, name, NULL);
+    jsize length = (*env)->GetStringLength(env, name);
+    for (jsize i = 0; chars && i < length && i < 10; i++) {
+        out[i] = chars[i] >= 0x20 && chars[i] <= 0xff && chars[i] != 0x7f ? chars[i] : '?';
+    }
+    if (chars) (*env)->ReleaseStringChars(env, name, chars);
+    guest_set_player_name(out);
+}
+
+// The game's volume in percent (the voice chat is not affected).
+JNIEXPORT void JNICALL Java_com_mkds_port_Native_setGameVolume(JNIEnv *env, jclass cls, jint percent) {
+    (void) env, (void) cls;
+    extern void android_audio_set_volume(int percent);
+    android_audio_set_volume(percent);
 }
 
 // Whether the game shows a race (the activity picks the screen layout from it).

@@ -222,6 +222,9 @@ void guest_set_paused(bool paused) { *(volatile bool *) (uintptr_t) s_header->pa
 void guest_set_vblank_rate(uint32_t mhz) { *(volatile uint32_t *) (uintptr_t) s_header->vblank_rate = mhz; }
 void guest_set_aspect(int32_t fx12) { *(volatile int32_t *) (uintptr_t) s_header->aspect = fx12; }
 void guest_set_language(int language) { *(volatile int32_t *) (uintptr_t) s_header->language = language; }
+void guest_set_player_name(const uint16_t *name) {
+    memcpy((void *) (uintptr_t) s_header->player_name, name, PORT_PLAYER_NAME * sizeof(uint16_t));
+}
 
 uint64_t guest_frame_count(void) { return *(volatile uint64_t *) (uintptr_t) s_header->frame_count; }
 void guest_set_lockstep(void *ready, void *done) {
