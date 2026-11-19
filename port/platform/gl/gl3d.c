@@ -244,6 +244,7 @@ static size_t s_batch_cap;
 typedef struct Block {
     uint32_t first, count, sig;
     float cx, cy, cz, cw; // centre in clip space (sums over the vertices / their number)
+    uint8_t id;           // polygon ID of its first polygon
 } Block;
 
 // Per polygon of the current list, for a paired block that turned a lot (a spinning wheel): it is moved as a whole
@@ -300,6 +301,7 @@ static size_t find_blocks(const Gx3dFrame *f, int which) {
         b->cx = (float) (sx / nv);
         b->cy = (float) (sy / nv);
         b->cz = (float) (sz / nv);
+        b->id = (uint8_t) ((f->polygons[i].attr >> 24) & 63);
         b->cw = (float) (sw / nv);
         i = j;
     }
@@ -471,8 +473,11 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
             used_c[c - ci] = 0;
             for (size_t p = pi; p < pe; p++) {
                 const Block *a = &pb[po[p]];
-                s_pairs[k++] = (Pair) {fabsf(a->cx - px) + fabsf(a->cy - py) + fabsf(a->cw - pw), (uint32_t) c,
-                                       (uint32_t) p};
+                // The same polygon ID is preferred: the game gives each kart's pieces (name tags) their own; item
+                // boxes get a new one every frame, which changes nothing for them.
+                float d = fabsf(a->cx - px) + fabsf(a->cy - py) + fabsf(a->cw - pw);
+                if (a->id != b->id) d += fmaxf(fabsf(a->cw), fabsf(b->cw)) * 0.25f + 1024.0f;
+                s_pairs[k++] = (Pair) {d, (uint32_t) c, (uint32_t) p};
             }
         }
         for (size_t p = pi; p < pe; p++) used_p[p] = 0;
@@ -491,6 +496,49 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
         pi = pe;
         ci = ce;
     }
+}
+
+// A polygon seen in one of the two frames and culled or out of view in the other (an edge-on side turning away, a
+// piece leaving the screen): whether it shows is decided on its interpolated shape, as the DS decides on the frame's,
+// or it would blink at the in-between frames.
+static bool interp_visible(const Gx3dFrame *f, const GxPolygon *p, const Gx3dFrame *prev, const GxPolygon *pp, float t) {
+    float v[8][4];
+    int n = p->count < 8 ? p->count : 8;
+    const Rigid *r = &s_rigid[p - f->polygons];
+    for (int k = 0; k < n; k++) {
+        const GxVertex *g = &f->vertices[p->first + k], *o = &prev->vertices[pp->first + k];
+        if (r->on) {
+            v[k][0] = g->x + r->dx * (1 - t);
+            v[k][1] = g->y + r->dy * (1 - t);
+            v[k][2] = g->z + r->dz * (1 - t);
+            v[k][3] = g->w + r->dw * (1 - t);
+        } else {
+            v[k][0] = o->x + (g->x - o->x) * t;
+            v[k][1] = o->y + (g->y - o->y) * t;
+            v[k][2] = o->z + (g->z - o->z) * t;
+            v[k][3] = o->w + (g->w - o->w) * t;
+        }
+    }
+    // Entirely outside one clip plane.
+    for (int plane = 0; plane < 6; plane++) {
+        int outside = 0;
+        for (int k = 0; k < n; k++) {
+            float c = v[k][plane >> 1];
+            if (plane & 1 ? c > v[k][3] : c < -v[k][3]) outside++;
+        }
+        if (outside == n) return false;
+    }
+    // Facing, as gx3d.c: winding in homogeneous coordinates.
+    double d = (double) v[0][0] * ((double) v[1][1] * v[2][3] - (double) v[1][3] * v[2][1]) -
+               (double) v[0][1] * ((double) v[1][0] * v[2][3] - (double) v[1][3] * v[2][0]) +
+               (double) v[0][3] * ((double) v[1][0] * v[2][1] - (double) v[1][1] * v[2][0]);
+    if (d == 0 && n == 4) {
+        d = (double) v[0][0] * ((double) v[2][1] * v[3][3] - (double) v[2][3] * v[3][1]) -
+            (double) v[0][1] * ((double) v[2][0] * v[3][3] - (double) v[2][3] * v[3][0]) +
+            (double) v[0][3] * ((double) v[2][0] * v[3][1] - (double) v[2][1] * v[3][0]);
+    }
+    bool front = d >= 0;
+    return front ? (p->attr & 0x80) != 0 : (p->attr & 0x40) != 0;
 }
 
 static float s_target_aspect = 4.0f / 3.0f; // of the render target
@@ -568,7 +616,12 @@ uint32_t gl3d_render(const Gx3dFrame *f, const Gx3dFrame *prev, float t, const F
     for (int pass = 0; pass < 2; pass++) {
         for (uint32_t i = 0; i < f->polygon_count; i++) {
             const GxPolygon *p = &f->polygons[i];
-            if (p->hidden) continue;
+            const GxPolygon *ip = prev && s_match[i] >= 0 ? &prev->polygons[s_match[i]] : NULL;
+            if (ip && p->hidden != ip->hidden) {
+                if (!interp_visible(f, p, prev, ip, t)) continue;
+            } else if (p->hidden) {
+                continue;
+            }
             uint32_t alpha = (p->attr >> 16) & 31;
             uint32_t fmt = (p->teximage >> 26) & 7;
             bool shadow = ((p->attr >> 4) & 3) == 3;

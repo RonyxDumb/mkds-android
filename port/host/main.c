@@ -109,7 +109,7 @@ static bool on_frame(const FrameSnapshot *f, uint64_t n) {
         fwrite(audio, 4, (size_t) samples, s_wav);
         s_wav_frames += (uint32_t) samples;
     }
-    if (s_dump_every && n % s_dump_every == 0) {
+    if (s_dump_every && n % s_dump_every == 0 && (!getenv("MKDS_DUMP_FROM") || n >= (uint64_t) atoi(getenv("MKDS_DUMP_FROM")))) {
         char path[512];
         snprintf(path, sizeof(path), "%s/frame_%05llu.png", s_out, (unsigned long long) n);
         host_write_frame(f, path);
