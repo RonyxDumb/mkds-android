@@ -218,9 +218,20 @@ void present_update(const FrameSnapshot *f, int scale) {
     // on while the capture does, even if a frame was skipped here.
     uint32_t capcnt = (uint32_t) f->io[0x64] | f->io[0x65] << 8 | f->io[0x66] << 16 | (uint32_t) f->io[0x67] << 24;
     bool whole_capture = capture && has_3d && ((capcnt >> 20) & 3) == 3 && ((capcnt >> 29) & 3) == 0;
+    // The capture bit can be seen already cleared (the game process clears it when the app has drawn the capture,
+    // while the next frame is being taken): the mode ends only when the screens stop swapping or a few frames in a
+    // row have no capture.
+    static int s_alt_misses;
+    bool swapped = f->number == s_last_number + 1 && s_shown.a_on_top != s_prev_a_on_top;
+    if (s_alt && has_3d && !whole_capture && (swapped || ++s_alt_misses < 4)) {
+        whole_capture = true;
+    } else if (whole_capture) {
+        s_alt_misses = 0;
+    }
     if (!whole_capture) {
         s_held[0].valid = s_held[1].valid = false;
         s_alt = false;
+        s_alt_misses = 0;
     } else if (!s_alt && f->number == s_last_number + 1 && s_shown.a_on_top != s_prev_a_on_top) {
         s_alt = true;
         s_held[0].valid = s_held[1].valid = false;

@@ -202,6 +202,10 @@ static int32_t det3(int64_t a0, int64_t a1, int64_t a2, int64_t b0, int64_t b1, 
     return d > 0 ? 1 : d < 0 ? -1 : 0;
 }
 
+// Set by the game around what it draws (see tools/portify.py): the identity of the object, so that the renderer
+// pairs each object's pieces with the same object's in the previous frame (frame interpolation).
+unsigned int g_port_draw_id;
+
 static void emit_polygon(const GxVertex *v, int count) {
     Gx3dFrame *f = building();
     uint32_t index_in_block = G.prim_index++;
@@ -242,6 +246,7 @@ static void emit_polygon(const GxVertex *v, int count) {
     p->teximage = G.teximage;
     p->pltt = G.pltt;
     p->tag = index_in_block;
+    p->obj = g_port_draw_id;
     // The width of the view the projection maps to the screen, relative to its height: wider than 4:3 when the game
     // projects the widescreen view (g_port_aspect).
     if (G.proj_aspect_dirty) {

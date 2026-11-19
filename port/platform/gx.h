@@ -31,6 +31,7 @@ typedef struct GxPolygon {
     uint32_t pltt;       // PLTT_BASE
     uint32_t tag;        // place in its vertex block (BEGIN_VTXS), counting culled ones: identity for interpolation
     int32_t aspect;      // aspect ratio of its projection (20.12): 4:3 views keep their shape on a wide screen
+    uint32_t obj;        // what the game was drawing (g_port_draw_id): identity of the object for interpolation
 } GxPolygon;
 
 typedef struct Gx3dFrame {

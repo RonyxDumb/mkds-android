@@ -2,7 +2,10 @@
  * Maps CodeWarrior intrinsics and extensions onto clang equivalents. */
 #pragma once
 #define PLATFORM_PORT
-extern int g_port_aspect; // race camera aspect ratio (platform/frame.c) 1
+extern int g_port_aspect; // race camera aspect ratio (platform/frame.c)
+// The identity of what the game draws, for frame interpolation (port/platform/gx3d.c, tools/portify.py).
+extern unsigned int g_port_draw_id;
+#define PORT_DRAW_ID(object) ((unsigned int) (unsigned long) (object))
 extern void *port_player_name(void *saved); // the player's name for races and other players (platform/os.c)
 
 

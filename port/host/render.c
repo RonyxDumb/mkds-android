@@ -144,6 +144,7 @@ static bool gl_frame(const FrameSnapshot *f, const char *path) {
         present_init();
         ready = true;
     }
+    if (getenv("MKDS_DROPCAP") && f->number % 3 == 0) ((FrameSnapshot *) f)->io[0x67] &= 0x7f; // tests: as on phones
     present_update(f, GL_SCALE);
     present_set_wide(g_host_aspect);
     const int layout[8] = {0, 0, W, H / 2, 0, H / 2, W, H / 2};

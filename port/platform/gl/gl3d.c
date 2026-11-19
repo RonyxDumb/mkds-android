@@ -262,6 +262,7 @@ typedef struct Block {
     uint32_t first, count, sig;
     float cx, cy, cz, cw; // centre in clip space (sums over the vertices / their number)
     uint8_t id;           // polygon ID of its first polygon
+    uint32_t obj;         // what the game was drawing (g_port_draw_id), 0 when it did not say
     uint16_t front;       // how many of its polygons face the viewer
 } Block;
 
@@ -320,6 +321,7 @@ static size_t find_blocks(const Gx3dFrame *f, int which) {
         b->cy = (float) (sy / nv);
         b->cz = (float) (sz / nv);
         b->id = (uint8_t) ((f->polygons[i].attr >> 24) & 63);
+        b->obj = f->polygons[i].obj;
         b->front = 0;
         for (uint32_t k = i; k < j; k++) b->front += f->polygons[k].front;
         b->cw = (float) (sw / nv);
@@ -334,8 +336,8 @@ static int cmp_block_sig(const void *a, const void *b) {
     return x < y ? -1 : x > y;
 }
 
-static uint32_t *s_order[2];
-static size_t s_order_cap[2];
+static uint32_t *s_order[4];
+static size_t s_order_cap[4];
 
 static uint32_t *sorted_by_sig(const Block *blocks, size_t n, int which) {
     if (n + 1 > s_order_cap[which]) {
@@ -396,6 +398,33 @@ static void pair_blocks(const Block *pb, const Block *cb, uint32_t c, uint32_t p
     for (uint32_t k = 0; k < b->count; k++) s_rigid[b->first + k] = r;
 }
 
+static int cmp_block_obj(const void *a, const void *b) {
+    uint32_t x = *(const uint32_t *) a, y = *(const uint32_t *) b;
+    uint32_t ox = s_sort_blocks[x].obj, oy = s_sort_blocks[y].obj;
+    if (ox != oy) return ox < oy ? -1 : 1;
+    return x < y ? -1 : x > y;
+}
+
+// Blocks of the list ordered by draw identity, then by place in the list (into s_order[2 + which]).
+static uint32_t *sorted_by_obj(const Block *blocks, size_t n, int which) {
+    which += 2;
+    if (n + 1 > s_order_cap[which]) {
+        s_order_cap[which] = (n + 1) * 2;
+        s_order[which] = realloc(s_order[which], s_order_cap[which] * sizeof(uint32_t));
+    }
+    for (size_t i = 0; i < n; i++) s_order[which][i] = (uint32_t) i;
+    s_sort_blocks = blocks;
+    qsort(s_order[which], n, sizeof(uint32_t), cmp_block_obj);
+    return s_order[which];
+}
+
+// Pairs the blocks of the two lists.
+// 1. By identity: the game says which object it draws (g_port_draw_id: each kart, item box, map object, name tag,
+//    the course); an object draws its pieces in the same order every frame, so the n-th block of an object is paired
+//    with the n-th block of the same object in the previous list (when the structure is the same). No guessing.
+// 2. What is left (no identity: menus, effects, the sky; or a piece that changed): a structure found once in each
+//    list is its own pair; among identical blocks, where each one was is predicted from the move of the nearest
+//    paired piece, and the pairs are taken by distance to the prediction, nearest first.
 static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
     size_t np = find_blocks(prev, 0), nc = find_blocks(f, 1);
     if (f->polygon_count + 1 > s_match_cap) {
@@ -418,27 +447,32 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
     s_pair_cur = f;
     for (uint32_t i = 0; i < f->polygon_count; i++) s_match[i] = -1;
     const Block *pb = s_blocks[0], *cb = s_blocks[1];
-    const uint32_t *po = sorted_by_sig(pb, np, 0), *co = sorted_by_sig(cb, nc, 1);
+    uint8_t *used_p = s_used, *used_c = s_used + np; // by block index
+    memset(s_used, 0, np + nc);
+    size_t na = 0, judged = 0, jumped = 0;
 
-    // Anchors: structures found once in each list.
-    size_t na = 0, uniq = 0, jumped = 0;
+    // 1. Identity.
+    const uint32_t *pq = sorted_by_obj(pb, np, 0), *cq = sorted_by_obj(cb, nc, 1);
     for (size_t pi = 0, ci = 0; pi < np && ci < nc;) {
-        uint32_t ps = pb[po[pi]].sig, cs = cb[co[ci]].sig;
-        if (ps != cs) {
-            if (ps < cs) pi++;
+        uint32_t po_ = pb[pq[pi]].obj, co_ = cb[cq[ci]].obj;
+        if (po_ != co_) {
+            if (po_ < co_) pi++;
             else ci++;
             continue;
         }
         size_t pe = pi, ce = ci;
-        while (pe < np && pb[po[pe]].sig == ps) pe++;
-        while (ce < nc && cb[co[ce]].sig == cs) ce++;
-        if (pe - pi == 1 && ce - ci == 1) {
-            const Block *a = &pb[po[pi]], *b = &cb[co[ci]];
-            float scale = fmaxf(fabsf(a->cw), fabsf(b->cw)) + 4096.0f;
-            uniq++;
-            if (block_distance(a, b) > (fabsf(b->cw) + 4096.0f) * 0.3f) jumped++;
-            if (block_distance(a, b) <= scale) {
-                pair_blocks(pb, cb, co[ci], po[pi]);
+        while (pe < np && pb[pq[pe]].obj == po_) pe++;
+        while (ce < nc && cb[cq[ce]].obj == co_) ce++;
+        if (po_ != 0) {
+            for (size_t r = 0; r < pe - pi && r < ce - ci; r++) {
+                const Block *a = &pb[pq[pi + r]], *b = &cb[cq[ci + r]];
+                if (a->sig != b->sig) continue;
+                float d = block_distance(a, b);
+                judged++;
+                if (d > (fabsf(b->cw) + 4096.0f) * 0.3f) jumped++;
+                if (d > fmaxf(fabsf(a->cw), fabsf(b->cw)) + 4096.0f) continue; // a cut
+                used_p[pq[pi + r]] = used_c[cq[ci + r]] = 1;
+                pair_blocks(pb, cb, cq[ci + r], pq[pi + r]);
                 s_anchors[na++] = (Anchor) {b->cx, b->cy, b->cw, b->cx - a->cx, b->cy - a->cy, b->cw - a->cw};
             }
         }
@@ -446,15 +480,47 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
         ci = ce;
     }
 
-    // A camera cut (the course intros change shots): most single pieces jumped. Nothing is interpolated then, or
-    // the frame would show everything half way between two shots.
-    if (uniq >= 8 && jumped * 2 > uniq) {
+    // 2. The rest, grouped by structure.
+    const uint32_t *po = sorted_by_sig(pb, np, 0), *co = sorted_by_sig(cb, nc, 1);
+    for (size_t pi = 0, ci = 0; pi < np && ci < nc;) {
+        uint32_t ps = pb[po[pi]].sig, cs = cb[co[ci]].sig;
+        if (ps != cs) {
+            if (ps < cs) pi++;
+            else ci++;
+            continue;
+        }
+        size_t pe = pi, ce = ci, fp = 0, fc = 0, lp = 0, lc = 0;
+        while (pe < np && pb[po[pe]].sig == ps) {
+            if (!used_p[po[pe]]) fp++, lp = pe;
+            pe++;
+        }
+        while (ce < nc && cb[co[ce]].sig == cs) {
+            if (!used_c[co[ce]]) fc++, lc = ce;
+            ce++;
+        }
+        if (fp == 1 && fc == 1) {
+            const Block *a = &pb[po[lp]], *b = &cb[co[lc]];
+            float d = block_distance(a, b);
+            judged++;
+            if (d > (fabsf(b->cw) + 4096.0f) * 0.3f) jumped++;
+            if (d <= fmaxf(fabsf(a->cw), fabsf(b->cw)) + 4096.0f) {
+                used_p[po[lp]] = used_c[co[lc]] = 1;
+                pair_blocks(pb, cb, co[lc], po[lp]);
+                s_anchors[na++] = (Anchor) {b->cx, b->cy, b->cw, b->cx - a->cx, b->cy - a->cy, b->cw - a->cw};
+            }
+        }
+        pi = pe;
+        ci = ce;
+    }
+
+    // A camera cut (the course intros change shots): most pieces jumped. Nothing is interpolated then, or the frame
+    // would show everything half way between two shots.
+    if (judged >= 8 && jumped * 2 > judged) {
         for (uint32_t i = 0; i < f->polygon_count; i++) s_match[i] = -1;
         return;
     }
 
-    // Identical blocks.
-    uint8_t *used_p = s_used, *used_c = s_used + np;
+    // Identical blocks left.
     for (size_t pi = 0, ci = 0; pi < np && ci < nc;) {
         uint32_t ps = pb[po[pi]].sig, cs = cb[co[ci]].sig;
         if (ps != cs) {
@@ -465,11 +531,6 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
         size_t pe = pi, ce = ci;
         while (pe < np && pb[po[pe]].sig == ps) pe++;
         while (ce < nc && cb[co[ce]].sig == cs) ce++;
-        if (pe - pi == 1 && ce - ci == 1) {
-            pi = pe;
-            ci = ce;
-            continue;
-        }
         size_t n = (pe - pi) * (ce - ci);
         if (n > s_pair_cap) {
             s_pair_cap = n * 2;
@@ -477,8 +538,9 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
         }
         size_t k = 0;
         for (size_t c = ci; c < ce; c++) {
+            if (used_c[co[c]]) continue;
             const Block *b = &cb[co[c]];
-            // Where it was: moved back by the motion of the nearest anchor.
+            // Where it was: moved back by the motion of the nearest paired piece.
             float px = b->cx, py = b->cy, pw = b->cw, best = -1;
             for (size_t a = 0; a < na; a++) {
                 const Anchor *an = &s_anchors[a];
@@ -490,31 +552,26 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
                     pw = b->cw - an->dw;
                 }
             }
-            used_c[c - ci] = 0;
             for (size_t p = pi; p < pe; p++) {
+                if (used_p[po[p]]) continue;
                 const Block *a = &pb[po[p]];
-                // The same polygon ID is preferred: the game gives each kart's pieces (name tags) their own; item
-                // boxes get a new one every frame, which changes nothing for them.
                 float d = fabsf(a->cx - px) + fabsf(a->cy - py) + fabsf(a->cw - pw);
-                if (a->id != b->id) d += fmaxf(fabsf(a->cw), fabsf(b->cw)) * 0.25f + 1024.0f;
-                // Pieces back to back (the two faces of a banner) share a centre: the one facing the same way is
-                // the same piece (the other's vertices are in mirror order, it would collapse in between).
-                if (a->front != b->front) d += fmaxf(fabsf(a->cw), fabsf(b->cw)) * 0.25f + 1024.0f;
-                s_pairs[k++] = (Pair) {d, (uint32_t) c, (uint32_t) p};
+                float penalty = fmaxf(fabsf(a->cw), fabsf(b->cw)) * 0.25f + 1024.0f;
+                if (a->obj != b->obj) d += penalty;
+                if (a->id != b->id) d += penalty; // each kart's pieces have their own polygon ID
+                if (a->front != b->front) d += penalty; // pieces back to back: the one facing the same way
+                s_pairs[k++] = (Pair) {d, (uint32_t) co[c], (uint32_t) po[p]};
             }
         }
-        for (size_t p = pi; p < pe; p++) used_p[p] = 0;
         qsort(s_pairs, k, sizeof(Pair), cmp_pair);
         for (size_t i = 0; i < k; i++) {
             const Pair *q = &s_pairs[i];
-            if (used_c[q->c - ci] || used_p[q->p]) continue;
-            const Block *a = &pb[po[q->p]], *b = &cb[co[q->c]];
-            // A cut, or a piece that came or went: too far from where it should have been (as for single pieces;
-            // the pairs nearest to their prediction are taken first).
+            if (used_c[q->c] || used_p[q->p]) continue;
+            const Block *a = &pb[q->p], *b = &cb[q->c];
+            // A cut, or a piece that came or went: too far from where it should have been.
             if (q->d > fmaxf(fabsf(a->cw), fabsf(b->cw)) * 0.5f + 4096.0f) continue;
-            used_c[q->c - ci] = 1;
-            used_p[q->p] = 1;
-            pair_blocks(pb, cb, co[q->c], po[q->p]);
+            used_c[q->c] = used_p[q->p] = 1;
+            pair_blocks(pb, cb, q->c, q->p);
         }
         pi = pe;
         ci = ce;

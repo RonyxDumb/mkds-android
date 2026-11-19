@@ -74,6 +74,38 @@ FIXUPS = [
      r"    RacePointLink \*pointLink;\n\n    ResetPointLinkCursor\(&kartAi->mPointLinkCursor, pointLink\);",
      "    extern void *g_port_ai_reset_link;\n    RacePointLink *pointLink = (RacePointLink *) g_port_ai_reset_link;\n\n"
      "    ResetPointLinkCursor(&kartAi->mPointLinkCursor, pointLink);", 1),
+    # Frame interpolation: the game says what it draws (g_port_draw_id, port/platform/gx3d.c), so that the renderer
+    # pairs each object's pieces with the same object's in the previous frame instead of guessing: map objects (item
+    # boxes are drawn sorted by distance, in a new order every frame), karts, items, name tags, the course (drawn
+    # into a command buffer: identified until the buffer is sent) and the kart in the menus.
+    ("src/Main/MapObjects/view_frustum.c", r"(                forEachObject\(list, mapObject, viewMatrix, mapObject->mAlpha\);)",
+     "                g_port_draw_id = PORT_DRAW_ID(mapObject);\n"
+     "                forEachObject(list, mapObject, viewMatrix, mapObject->mAlpha);\n"
+     "                g_port_draw_id = 0;", 2),
+    ("src/Main/Kart/karts.c", r"        DrawKart\(&gKarts\[\*kartIndices\]\);",
+     "        g_port_draw_id = PORT_DRAW_ID(&gKarts[*kartIndices]);\n"
+     "        DrawKart(&gKarts[*kartIndices]);\n"
+     "        g_port_draw_id = 0;", 1),
+    ("src/Main/Item/item_in_use.c", r"        object = pool->mObjects\[objectIndex\];",
+     "        object = pool->mObjects[objectIndex];\n        g_port_draw_id = PORT_DRAW_ID(object);", 2),
+    ("src/Main/Item/item_koura_w.c", r"            DrawItemPool\(&gItemPools\[poolIndex\], viewAxis\);",
+     "            DrawItemPool(&gItemPools[poolIndex], viewAxis);\n            g_port_draw_id = 0;", 1),
+    ("src/Main/Kart/kart_name_tags.c",
+     r"        kartObject = gKartNameTags->mNameTagByKart\[gKartNameTags->mKartIndicesByDistanceAlongView\[sortIndex\]\];",
+     "        kartObject = gKartNameTags->mNameTagByKart[gKartNameTags->mKartIndicesByDistanceAlongView[sortIndex]];\n"
+     "        g_port_draw_id = PORT_DRAW_ID(kartObject);", 1),
+    ("src/Main/Race/race.c", r"        DrawKartNameTags\(gCurrentViewMatrix\);",
+     "        DrawKartNameTags(gCurrentViewMatrix);\n        g_port_draw_id = 0;", 1),
+    ("src/Main/Race/race.c", r"    DrawCourseModelV\(\);\n    ApplyCameraFrustum\(gCurrentCamera, 0\);",
+     "    g_port_draw_id = 0xc0000001u;\n    DrawCourseModelV();\n    g_port_draw_id = 0;\n    ApplyCameraFrustum(gCurrentCamera, 0);", 1),
+    ("src/Main/Race/race.c", r"    NNS_G3dGeSetBuffer\(gGeBuffer\);\n    DrawCourseModel\(\);",
+     "    g_port_draw_id = 0xc0000002u;\n    NNS_G3dGeSetBuffer(gGeBuffer);\n    DrawCourseModel();", 1),
+    ("src/Main/Race/race.c", r"    NNS_G3dGeReleaseBuffer\(\);\n    DrawKarts\(\);",
+     "    NNS_G3dGeReleaseBuffer();\n    g_port_draw_id = 0;\n    DrawKarts();", 1),
+    ("src/Main/Menu/select_character.c", r"        DrawKartModelMenu\(\);",
+     "        g_port_draw_id = 0xc0000003u;\n        DrawKartModelMenu();\n        g_port_draw_id = 0;", 1),
+    ("src/Main/Menu/select_kart_data.c", r"        DrawKartModelMenu\(\);",
+     "        g_port_draw_id = 0xc0000003u;\n        DrawKartModelMenu();\n        g_port_draw_id = 0;", 1),
     # The game's entry point; `main` is the host program's.
     ("src/Main/System/main.c", r"^void main\(void\) \{", "void GameMain(void) {", 1),
     # VIEWPORT geometry command written by address.
