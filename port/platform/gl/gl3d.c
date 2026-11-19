@@ -168,6 +168,23 @@ static GLuint compile(GLenum type, const char *src) {
     return s;
 }
 
+// Render targets: one per screen (dual-screen 3D draws both screens in one present, at different widths; a target
+// recreated for the second one would be gone before the first one is composited, on some drivers).
+typedef struct Target {
+    GLuint fbo, color, depth;
+    int w, h;
+} Target;
+static Target s_targets[2];
+static int s_slot;
+
+void gl3d_use_target(int slot) {
+    Target *t = &s_targets[s_slot];
+    t->fbo = s_fbo, t->color = s_color, t->depth = s_depth, t->w = s_w, t->h = s_h;
+    s_slot = slot & 1;
+    t = &s_targets[s_slot];
+    s_fbo = t->fbo, s_color = t->color, s_depth = t->depth, s_w = t->w, s_h = t->h;
+}
+
 static void ensure_target(int w, int h) {
     if (w == s_w && h == s_h) return;
     if (s_fbo) {
@@ -245,6 +262,7 @@ typedef struct Block {
     uint32_t first, count, sig;
     float cx, cy, cz, cw; // centre in clip space (sums over the vertices / their number)
     uint8_t id;           // polygon ID of its first polygon
+    uint16_t front;       // how many of its polygons face the viewer
 } Block;
 
 // Per polygon of the current list, for a paired block that turned a lot (a spinning wheel): it is moved as a whole
@@ -302,6 +320,8 @@ static size_t find_blocks(const Gx3dFrame *f, int which) {
         b->cy = (float) (sy / nv);
         b->cz = (float) (sz / nv);
         b->id = (uint8_t) ((f->polygons[i].attr >> 24) & 63);
+        b->front = 0;
+        for (uint32_t k = i; k < j; k++) b->front += f->polygons[k].front;
         b->cw = (float) (sw / nv);
         i = j;
     }
@@ -477,6 +497,9 @@ static void match_lists(const Gx3dFrame *prev, const Gx3dFrame *f) {
                 // boxes get a new one every frame, which changes nothing for them.
                 float d = fabsf(a->cx - px) + fabsf(a->cy - py) + fabsf(a->cw - pw);
                 if (a->id != b->id) d += fmaxf(fabsf(a->cw), fabsf(b->cw)) * 0.25f + 1024.0f;
+                // Pieces back to back (the two faces of a banner) share a centre: the one facing the same way is
+                // the same piece (the other's vertices are in mirror order, it would collapse in between).
+                if (a->front != b->front) d += fmaxf(fabsf(a->cw), fabsf(b->cw)) * 0.25f + 1024.0f;
                 s_pairs[k++] = (Pair) {d, (uint32_t) c, (uint32_t) p};
             }
         }

@@ -325,7 +325,9 @@ static void draw_alt(const int layout[8], int w, int h, float t) {
         if (ts > 1.0f) ts = 1.0f;
         float wide = (float) hd->width / 256.0f;
         const Gx3dFrame *cur = &s_alt3d[screen][hd->cur], *prev = hd->have_prev ? &s_alt3d[screen][hd->cur ^ 1] : NULL;
+        gl3d_use_target(screen);
         GLuint tex3d = gl3d_render(cur, prev, prev ? ts : 1.0f, s_shown.snap, s_shown.scale, wide);
+        gl3d_use_target(0);
         glBindFramebuffer(GL_FRAMEBUFFER, s_target);
         glViewport(0, 0, w, h);
         float wq = (float) hd->width;
