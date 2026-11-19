@@ -26,7 +26,7 @@ import android.view.View;
 final class ControlsView extends View {
     private static final class Button {
         final int bits;
-        final String label;
+        String label;
         float x, y, r;
 
         Button(int bits, String label) {
@@ -43,14 +43,15 @@ final class ControlsView extends View {
     private static final int SWAP = 1 << 30; // not a DS button
     private static final int NET = 1 << 29;  // not a DS button: opens the network settings
     private static final int MIC = 1 << 28;  // not a DS button: the voice chat's microphone
-    private static final int OWN = SWAP | NET | MIC;
+    private static final int SCREENS = 1 << 27; // not a DS button: one or two screens
+    private static final int OWN = SWAP | NET | MIC | SCREENS;
 
     private final Button mA = new Button(Native.A, "A"), mB = new Button(Native.B, "B"), mX = new Button(Native.X, "X"),
             mY = new Button(Native.Y, "Y"), mL = new Button(Native.L, "L"), mR = new Button(Native.R, "R"),
             mStart = new Button(Native.START, "START"), mSelect = new Button(Native.SELECT, "SELECT"),
             mSwap = new Button(SWAP, "⇄"), mNet = new Button(NET, "NET"),
-            mMic = new Button(MIC, "MIC");
-    private final Button[] mButtons = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mSwap, mNet, mMic};
+            mMic = new Button(MIC, "MIC"), mScreens = new Button(SCREENS, "2");
+    private final Button[] mButtons = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mSwap, mNet, mMic, mScreens};
     private Runnable mOnNetwork, mOnMic;
     private boolean mOnline, mVoice, mMicOn;
     private int mPlayers; // online in the room, this phone included; 0 = not known yet, -1 = the server is silent
@@ -68,6 +69,21 @@ final class ControlsView extends View {
     private final RectF mTopRect = new RectF(), mBottomRect = new RectF();
     private RectF mTouchRect = mBottomRect;
     private boolean mSwapped;
+    // One screen: only the screen that matters is shown, the other one is not drawn at all: the top screen in
+    // races, the touch screen elsewhere (the menus' choices are there). The swap button shows the other one instead.
+    private boolean mSingle;
+    private boolean mShownRace; // what the layout was made for
+    private final Runnable mWatchRace = new Runnable() {
+        @Override
+        public void run() {
+            if (mSingle && Native.isRace() != mShownRace) {
+                mSwapped = false; // each change of scene starts with the screen that matters
+                applyScreens();
+                invalidate();
+            }
+            postDelayed(this, 200);
+        }
+    };
     private int mWidth, mHeight;
     private float mUnit;
     private final Paint mFill = new Paint(Paint.ANTI_ALIAS_FLAG), mText = new Paint(Paint.ANTI_ALIAS_FLAG),
@@ -78,6 +94,9 @@ final class ControlsView extends View {
 
     ControlsView(Context context) {
         super(context);
+        mSingle = context.getSharedPreferences("mkds", Context.MODE_PRIVATE).getBoolean("single_screen", false);
+        mScreens.label = mSingle ? "1" : "2";
+        post(mWatchRace);
         mText.setColor(0xc0ffffff);
         mText.setTextAlign(Paint.Align.CENTER);
         mText.setFakeBoldText(true);
@@ -105,6 +124,7 @@ final class ControlsView extends View {
         place(mSwap, u * 0.6f, u * 0.6f, u * 0.45f);
         place(mNet, u * 1.75f, u * 0.6f, u * 0.45f);
         place(mMic, u * 0.6f, u * 1.75f, u * 0.45f);
+        place(mScreens, u * 0.6f, u * 2.9f, u * 0.45f);
         mText.setTextSize(u * 0.42f);
         mRing.setStrokeWidth(u * 0.06f);
         invalidate();
@@ -114,6 +134,22 @@ final class ControlsView extends View {
         int w = mWidth, h = mHeight;
         if (w == 0) return;
         RectF top = mTopRect, bottom = mBottomRect;
+        if (mSingle) {
+            mShownRace = Native.isRace();
+            boolean showTop = mShownRace != mSwapped;
+            if (showTop) {
+                top.set(0, 0, w, h); // widescreen
+                bottom.set(0, 0, 0, 0);
+            } else {
+                bottom.set((w - h * 4f / 3f) / 2f, 0, (w + h * 4f / 3f) / 2f, h);
+                top.set(0, 0, 0, 0);
+            }
+            mTouchRect = bottom;
+            Native.setLayout(Math.round(top.left), Math.round(top.top), Math.round(top.width()), Math.round(top.height()),
+                    Math.round(bottom.left), Math.round(bottom.top), Math.round(bottom.width()),
+                    Math.round(bottom.height()));
+            return;
+        }
         // The main screen fills the display (the top one is widescreen; the touch screen keeps 4:3, centred); the
         // other one is an inset in the top right corner, as wide as the side margin of a 4:3 picture or more.
         float ih = Math.max(h * 0.32f, (w - h * 4f / 3f) / 2f * 3f / 4f), iw = ih * 4f / 3f;
@@ -165,10 +201,11 @@ final class ControlsView extends View {
         invalidate();
     }
 
-    // The buttons of the game are hidden with a gamepad; NET is hidden during races, MIC without voice chat.
+    // The buttons of the game are hidden with a gamepad (not the screen buttons); NET is hidden during races, MIC
+    // without voice chat.
     private boolean hidden(Button b, boolean race) {
         if (b.bits == MIC) return !mVoice;
-        return b.bits == NET ? race : mGamepadMode && b.bits != SWAP;
+        return b.bits == NET ? race : mGamepadMode && b.bits != SWAP && b.bits != SCREENS;
     }
 
     boolean isGamepadMode() {
@@ -239,7 +276,14 @@ final class ControlsView extends View {
             int bits = buttonsAt(x, y);
             if (bits != 0) {
                 f.role = ROLE_BUTTONS;
-                if ((bits & SWAP) != 0) {
+                if ((bits & SCREENS) != 0) {
+                    mSingle = !mSingle;
+                    mSwapped = false;
+                    mScreens.label = mSingle ? "1" : "2";
+                    getContext().getSharedPreferences("mkds", Context.MODE_PRIVATE).edit()
+                            .putBoolean("single_screen", mSingle).apply();
+                    applyScreens();
+                } else if ((bits & SWAP) != 0) {
                     mSwapped = !mSwapped;
                     applyScreens();
                 } else if ((bits & NET) != 0 && mOnNetwork != null) {
