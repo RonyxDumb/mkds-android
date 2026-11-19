@@ -13,6 +13,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          # Gradle's downloads are kept between runs: Maven Central refuses runners that ask too often (HTTP 429).
+          cache: gradle
       - name: Install NDK and CMake
         # The runner image has the Android SDK; add the exact NDK and CMake the build uses.
         run: |
@@ -24,7 +26,13 @@ jobs:
       - name: Build
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon assembleRelease
+          # A download refused by a repository (rate limit) is tried again after a pause.
+          for attempt in 1 2 3; do
+            ./gradlew --no-daemon assembleRelease && exit 0
+            echo "Build attempt $attempt failed, retrying"
+            sleep $((attempt * 60))
+          done
+          exit 1
       - uses: actions/upload-artifact@v5
         with:
           name: mkds-android-apk
