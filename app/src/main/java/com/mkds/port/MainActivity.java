@@ -38,8 +38,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        getWindow().getAttributes().layoutInDisplayCutoutMode =
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        if (android.os.Build.VERSION.SDK_INT >= 28) { // Android 9: displays with a notch
+            getWindow().getAttributes().layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        }
         Native.init(getFilesDir().getAbsolutePath());
         File crash = new File(getFilesDir(), "crash.txt");
         if (crash.isFile()) {
@@ -506,11 +508,21 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
+    // Full screen. Android 11 and later: the insets controller; before (Android 8 to 10, API 26-29): the system UI
+    // flags (the controller does not exist there: calling it ended the app at its start).
+    @SuppressWarnings("deprecation")
     private void hideSystemBars() {
-        WindowInsetsController c = getWindow().getInsetsController();
-        if (c != null) {
-            c.hide(WindowInsets.Type.systemBars());
-            c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                c.hide(WindowInsets.Type.systemBars());
+                c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
         }
     }
 
