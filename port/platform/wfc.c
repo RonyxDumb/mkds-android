@@ -569,7 +569,7 @@ static void on_tcp(const u8 *ip, const u8 *th, u32 len) {
         t->bytes_up = t->bytes_down = 0;
         t->ds_port = sport, t->ip = dst, t->port = dport;
         t->rcv_nxt = seq + 1;
-        t->iss = (u32) rand() * 2654435761u;
+        t->iss = ((u32) rand() ^ (u32) port_now_ns()) * 2654435761u; // differs between runs
         t->snd_una = t->snd_nxt = t->iss + 1;
         t->ds_wnd = rd16be(th + 14);
         t->mss = 536;
@@ -721,7 +721,8 @@ static void poll_tcp(void) {
 // A frame the DS sends (WM_SetDCFData): LLC/SNAP header and packet.
 extern int g_wm7_trace;
 static void trace_frame(const char *dir, const u8 *data, u32 len) {
-    if (!g_wm7_trace || len < 8) return;
+    // Always the first frames after connecting (the log shows where a connection stops), every frame in tests.
+    if (len < 8 || (!g_wm7_trace && s_frames_in + s_frames_out > 160)) return;
     u16 type = rd16be(data + 6);
     const u8 *p = data + 8;
     if (type == 0x0800 && len >= 28) {
@@ -763,6 +764,7 @@ void port_wfc_frame_from_ds(const u8 *data, u32 len) {
 // The DS connected to the access point.
 void port_wfc_connected(const u8 *ds_mac) {
     memcpy(s_ds_mac, ds_mac, 6);
+    s_frames_in = s_frames_out = 0;
     s_out_count = 0;
     port_log("wfc: connected to the access point");
 }
