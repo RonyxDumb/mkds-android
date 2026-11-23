@@ -378,7 +378,16 @@ bool port_wm7_poll(void);   // wm7.c
 bool port_wm7_active(void);
 static bool run_events(bool idle) {
     bool ran = run_deferred();
-    ran |= port_wm7_poll();
+    // The wireless messages are FIFO interrupts on the DS: their callbacks wake threads without switching to them
+    // there and then (a switch in the middle of a delivery let another delivery run inside it: a message was lost).
+    {
+        bool was_in_irq = s_in_irq;
+        s_in_irq = true;
+        OSi_ThreadInfo.mIrqDepth++;
+        ran |= port_wm7_poll();
+        OSi_ThreadInfo.mIrqDepth--;
+        s_in_irq = was_in_irq;
+    }
     if (s_alarms) {
         u64 now = OS_GetTick();
         if (s_alarms->mFire <= now) {

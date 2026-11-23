@@ -267,6 +267,15 @@ static void on_dns(u16 sport, const u8 *q, u32 len) {
     for (int i = 0; i < DNS_PENDING; i++) {
         if (!s_dns[i].used || now_ms() - s_dns[i].sent_ms > 5000) d = &s_dns[i];
     }
+    if (d && getenv_hosts() && hapi_inet_resolve("mkds-dns-delay")) { // tests: answered late (poll_dns)
+        d->used = true;
+        d->ds_port = sport;
+        d->id = 0xffff;
+        d->sent_ms = now_ms() - 1500 + hapi_inet_resolve("mkds-dns-delay") % 1000;
+        d->len = len;
+        memcpy(d->q, q, len);
+        return;
+    }
     if (s_dns_sock >= 0 && d && !getenv_hosts()) {
         d->used = true;
         d->ds_port = sport;
