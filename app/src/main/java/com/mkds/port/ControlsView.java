@@ -12,16 +12,16 @@ import android.view.View;
 /**
  * Screen layout and touch controls for playing on a phone in landscape.
  *
- * The top screen fills the display in widescreen (the game draws the wider view), the touch screen sits as an inset
- * in the top right corner; the swap button exchanges them (the touch screen large and centred, for menus that are
- * easier to tap).
+ * The game fills the display (gl/present.c): in races the race view with the map in a corner; elsewhere the two
+ * screens side by side, the touch screen on the right, where touches go.
  * Controls:
  *  - left half: a floating stick that appears where the thumb lands and stays with that finger (the D-pad);
  *  - right side: a big A with R right above it (one thumb between them holds both: accelerate and drift), B, L (item),
  *    X and Y; a finger can slide from button to button;
- *  - top: SELECT, START, the screen swap and, outside races, NET (the network settings: local or online play);
+ *  - top: SELECT, START, the options and, outside races, NET (the network settings: local or online play);
  *    with voice chat on, MIC (the microphone on or off).
- * Touches on the touch screen go to the game as stylus input.
+ * Outside races the game's buttons and the stick are not shown (the menus are touched); touches on the touch
+ * screen go to the game as stylus input.
  */
 final class ControlsView extends View {
     private static final class Button {
@@ -40,25 +40,27 @@ final class ControlsView extends View {
         }
     }
 
-    private static final int SWAP = 1 << 30; // not a DS button
     private static final int NET = 1 << 29;  // not a DS button: opens the network settings
     private static final int MIC = 1 << 28;  // not a DS button: the voice chat's microphone
-    private static final int SCREENS = 1 << 27; // not a DS button: one or two screens
-    private static final int OWN = SWAP | NET | MIC | SCREENS;
+    private static final int OPT = 1 << 26; // not a DS button: the options screen
+    private static final int OWN = NET | MIC | OPT;
 
     private final Button mA = new Button(Native.A, "A"), mB = new Button(Native.B, "B"), mX = new Button(Native.X, "X"),
             mY = new Button(Native.Y, "Y"), mL = new Button(Native.L, "L"), mR = new Button(Native.R, "R"),
             mStart = new Button(Native.START, "START"), mSelect = new Button(Native.SELECT, "SELECT"),
-            mSwap = new Button(SWAP, "⇄"), mNet = new Button(NET, "NET"),
-            mMic = new Button(MIC, "MIC"), mScreens = new Button(SCREENS, "2");
-    private final Button[] mButtons = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mSwap, mNet, mMic, mScreens};
-    private Runnable mOnNetwork, mOnMic;
+            mNet = new Button(NET, "NET"), mMic = new Button(MIC, "MIC"), mOpt = new Button(OPT, "⚙");
+    private final Button[] mButtons = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mNet, mMic, mOpt};
+    private Runnable mOnNetwork, mOnMic, mOnOptions;
+    // From the options screen (OptionsScreen): see applyOptions.
+    private boolean mTouchAlways, mAutoAccel, mBigDrift, mHaptics = true;
+    private float mSizeScale = 1f, mOpacity = 1f;
+    private long mAReleaseUntil; // auto-accelerate: A let go briefly when the A button is touched (a fresh press)
     private boolean mOnline, mVoice, mMicOn;
     private int mPlayers; // online in the room, this phone included; 0 = not known yet, -1 = the server is silent
     private String mPlayerNames = ""; // the others' names
 
     // What each finger does, by pointer id.
-    private static final int ROLE_BUTTONS = 0, ROLE_STICK = 1, ROLE_STYLUS = 2;
+    private static final int ROLE_BUTTONS = 0, ROLE_STICK = 1, ROLE_STYLUS = 2, ROLE_NONE = 3;
 
     private static final class Finger {
         int role;
@@ -66,21 +68,21 @@ final class ControlsView extends View {
     }
 
     private final SparseArray<Finger> mFingers = new SparseArray<>();
-    private final RectF mTopRect = new RectF(), mBottomRect = new RectF();
-    private RectF mTouchRect = mBottomRect;
-    private boolean mSwapped;
-    // One screen: only the screen that matters is shown, the other one is not drawn at all: the top screen in
-    // races, the touch screen elsewhere (the menus' choices are there). The swap button shows the other one instead.
-    private boolean mSingle;
-    private boolean mShownRace; // what the layout was made for
+    private final RectF mTouchRect = new RectF(); // the touch screen's part of the picture (from the renderer)
+    private final float[] mTouchRectRaw = new float[4];
+    private boolean mRace; // the game shows a race: its buttons and the stick are there
     private final Runnable mWatchRace = new Runnable() {
         @Override
         public void run() {
-            if (mSingle && Native.isRace() != mShownRace) {
-                mSwapped = false; // each change of scene starts with the screen that matters
-                applyScreens();
+            boolean race = Native.isRace();
+            if (race != mRace) {
+                mRace = race;
+                mFingers.clear();
+                mTouchButtons = 0;
+                send();
                 invalidate();
             }
+            if (mAutoAccel) send(); // A follows races starting and ending
             postDelayed(this, 200);
         }
     };
@@ -94,8 +96,7 @@ final class ControlsView extends View {
 
     ControlsView(Context context) {
         super(context);
-        mSingle = context.getSharedPreferences("mkds", Context.MODE_PRIVATE).getBoolean("single_screen", false);
-        mScreens.label = mSingle ? "1" : "2";
+        readOptions();
         post(mWatchRace);
         mText.setColor(0xc0ffffff);
         mText.setTextAlign(Paint.Align.CENTER);
@@ -104,62 +105,230 @@ final class ControlsView extends View {
         mRing.setColor(0x60ffffff);
     }
 
+    private void readOptions() {
+        Context c = getContext();
+        mTouchAlways = OptionsScreen.touchAlways(c);
+        mAutoAccel = OptionsScreen.autoAccelerate(c);
+        mBigDrift = OptionsScreen.bigDrift(c);
+        mHaptics = OptionsScreen.haptics(c);
+        mSizeScale = OptionsScreen.buttonSizePercent(c) / 100f;
+        mOpacity = OptionsScreen.buttonOpacityPercent(c) / 100f;
+    }
+
+    /** The options screen changed something: read the options again and lay out anew. */
+    void applyOptions() {
+        readOptions();
+        if (mWidth > 0) layoutScreens(mWidth, mHeight);
+        send();
+    }
+
+    /** What the options button does. */
+    void setOnOptions(Runnable r) {
+        mOnOptions = r;
+    }
+
     void layoutScreens(int w, int h) {
         mWidth = w;
         mHeight = h;
         float u = mUnit = Math.min(h / 8f, w / 15f);
         Native.setWideAspect((float) w / h);
-        applyScreens();
+        Native.setLayout(0, 0, w, h, 0, 0, w, h); // the same rectangle twice: one screen
 
-        // Right hand: A big, R above it, close enough for one thumb to cover both; B to the left of A; L and X/Y above B.
-        place(mA, w - u * 1.45f, h - u * 1.55f, u * 0.95f);
-        place(mR, w - u * 1.45f, h - u * 3.5f, u * 0.9f);
-        place(mB, w - u * 3.45f, h - u * 1.1f, u * 0.75f);
-        place(mL, w - u * 3.45f, h - u * 2.9f, u * 0.7f);
-        place(mX, w - u * 3.1f, h - u * 4.55f, u * 0.5f);
-        place(mY, w - u * 4.75f, h - u * 2.0f, u * 0.5f);
+        float b = u * mSizeScale; // the game's buttons, at the chosen size
+        if (mBigDrift) {
+            // A in the corner, a large R to its left (with auto-accelerate the thumb rests there); B above A, L above R.
+            place(mA, w - b * 1.45f, h - b * 1.45f, b * 0.9f);
+            place(mR, w - b * 3.75f, h - b * 1.55f, b * 1.15f);
+            place(mB, w - b * 1.45f, h - b * 3.35f, b * 0.75f);
+            place(mL, w - b * 3.75f, h - b * 3.75f, b * 0.75f);
+            place(mX, w - b * 2.6f, h - b * 4.9f, b * 0.5f);
+            place(mY, w - b * 5.75f, h - b * 2.8f, b * 0.5f);
+        } else {
+            // Right hand: A big, R above it, close enough for one thumb to cover both; B to the left of A; L and X/Y
+            // above B.
+            place(mA, w - b * 1.45f, h - b * 1.55f, b * 0.95f);
+            place(mR, w - b * 1.45f, h - b * 3.5f, b * 0.9f);
+            place(mB, w - b * 3.45f, h - b * 1.1f, b * 0.75f);
+            place(mL, w - b * 3.45f, h - b * 2.9f, b * 0.7f);
+            place(mX, w - b * 3.1f, h - b * 4.55f, b * 0.5f);
+            place(mY, w - b * 4.75f, h - b * 2.0f, b * 0.5f);
+        }
         // Top: SELECT, START, swap.
         place(mSelect, w / 2f - u * 1.3f, u * 0.4f, u * 0.38f);
         place(mStart, w / 2f + u * 1.3f, u * 0.4f, u * 0.38f);
-        place(mSwap, u * 0.6f, u * 0.6f, u * 0.45f);
-        place(mNet, u * 1.75f, u * 0.6f, u * 0.45f);
-        place(mMic, u * 0.6f, u * 1.75f, u * 0.45f);
-        place(mScreens, u * 0.6f, u * 2.9f, u * 0.45f);
+        place(mOpt, w / 2f + u * 2.6f, u * 0.4f, u * 0.38f);
+        place(mNet, w / 2f - u * 2.6f, u * 0.4f, u * 0.38f);
+        place(mMic, w / 2f - u * 3.6f, u * 0.4f, u * 0.38f);
+        applyCustomLayout();
         mText.setTextSize(u * 0.42f);
         mRing.setStrokeWidth(u * 0.06f);
         invalidate();
     }
 
-    private void applyScreens() {
-        int w = mWidth, h = mHeight;
-        if (w == 0) return;
-        RectF top = mTopRect, bottom = mBottomRect;
-        if (mSingle) {
-            mShownRace = Native.isRace();
-            boolean showTop = mShownRace != mSwapped;
-            if (showTop) {
-                top.set(0, 0, w, h); // widescreen
-                bottom.set(0, 0, 0, 0);
-            } else {
-                bottom.set((w - h * 4f / 3f) / 2f, 0, (w + h * 4f / 3f) / 2f, h);
-                top.set(0, 0, 0, 0);
+    // ------------------------------------------------------------------------------------------ layout editor
+    // The game's buttons can be moved and resized (Options > Controls > Edit layout): each one's place is kept in the
+    // preferences as "layout_<label>" = x/width, y/height, radius/height, so that it fits any display; Reset removes
+    // them all (the layout above comes back).
+    private final Button[] mEditable = {mA, mB, mX, mY, mL, mR, mStart, mSelect};
+    private boolean mEditing;
+    private Runnable mOnEditDone;
+    private Button mSelected;
+    private float mGrabDx, mGrabDy, mPinchStart, mPinchRadius;
+    private final RectF[] mTools = {new RectF(), new RectF(), new RectF(), new RectF(), new RectF()};
+    private static final String[] TOOL_LABELS = {"−", "+", "Reset", "Cancel", "Save"};
+
+    private void applyCustomLayout() {
+        android.content.SharedPreferences prefs = OptionsScreen.prefs(getContext());
+        for (Button b : mEditable) {
+            String v = prefs.getString("layout_" + b.label, null);
+            if (v == null) continue;
+            String[] parts = v.split(",");
+            if (parts.length != 3) continue;
+            try {
+                b.x = Float.parseFloat(parts[0]) * mWidth;
+                b.y = Float.parseFloat(parts[1]) * mHeight;
+                b.r = Float.parseFloat(parts[2]) * mHeight;
+            } catch (NumberFormatException ignored) {
             }
-            mTouchRect = bottom;
-            Native.setLayout(Math.round(top.left), Math.round(top.top), Math.round(top.width()), Math.round(top.height()),
-                    Math.round(bottom.left), Math.round(bottom.top), Math.round(bottom.width()),
-                    Math.round(bottom.height()));
-            return;
         }
-        // The main screen fills the display (the top one is widescreen; the touch screen keeps 4:3, centred); the
-        // other one is an inset in the top right corner, as wide as the side margin of a 4:3 picture or more.
-        float ih = Math.max(h * 0.32f, (w - h * 4f / 3f) / 2f * 3f / 4f), iw = ih * 4f / 3f;
-        RectF main = mSwapped ? bottom : top, inset = mSwapped ? top : bottom;
-        if (mSwapped) main.set((w - h * 4f / 3f) / 2f, 0, (w + h * 4f / 3f) / 2f, h);
-        else main.set(0, 0, w, h);
-        inset.set(w - iw, 0, w, ih);
-        mTouchRect = bottom;
-        Native.setLayout(Math.round(top.left), Math.round(top.top), Math.round(top.width()), Math.round(top.height()),
-                Math.round(bottom.left), Math.round(bottom.top), Math.round(bottom.width()), Math.round(bottom.height()));
+    }
+
+    boolean isEditing() {
+        return mEditing;
+    }
+
+    /** Back while editing: the editor closes without saving. */
+    void cancelEditing() {
+        if (mEditing) stopEditing(false);
+    }
+
+    /** Shows the layout editor; done runs when it is closed (saved or not). */
+    void startEditing(Runnable done) {
+        mEditing = true;
+        mOnEditDone = done;
+        mSelected = mA;
+        mFingers.clear();
+        mTouchButtons = 0;
+        send();
+        invalidate();
+    }
+
+    private void stopEditing(boolean save) {
+        if (save) {
+            android.content.SharedPreferences.Editor ed = OptionsScreen.prefs(getContext()).edit();
+            for (Button b : mEditable) {
+                ed.putString("layout_" + b.label, (b.x / mWidth) + "," + (b.y / mHeight) + "," + (b.r / mHeight));
+            }
+            ed.apply();
+        }
+        mEditing = false;
+        layoutScreens(mWidth, mHeight); // saved places, or the ones before
+        if (mOnEditDone != null) mOnEditDone.run();
+    }
+
+    private void resetLayout() {
+        android.content.SharedPreferences.Editor ed = OptionsScreen.prefs(getContext()).edit();
+        for (Button b : mEditable) ed.remove("layout_" + b.label);
+        ed.apply();
+        layoutScreens(mWidth, mHeight);
+    }
+
+    private boolean editTouch(MotionEvent e) {
+        int action = e.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            float x = e.getX(), y = e.getY();
+            for (int i = 0; i < mTools.length; i++) {
+                if (!mTools[i].contains(x, y)) continue;
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                switch (i) {
+                    case 0: if (mSelected != null) mSelected.r = Math.max(mUnit * 0.3f, mSelected.r * 0.9f); break;
+                    case 1: if (mSelected != null) mSelected.r = Math.min(mUnit * 2.2f, mSelected.r * 1.1f); break;
+                    case 2: resetLayout(); break;
+                    case 3: stopEditing(false); return true;
+                    default: stopEditing(true); return true;
+                }
+                invalidate();
+                return true;
+            }
+            mSelected = null;
+            float best = Float.MAX_VALUE;
+            for (Button b : mEditable) { // the nearest button under the finger
+                float d = (float) Math.hypot(x - b.x, y - b.y);
+                if (d <= Math.max(b.r, mUnit * 0.6f) && d < best) {
+                    best = d;
+                    mSelected = b;
+                }
+            }
+            if (mSelected != null) {
+                mGrabDx = mSelected.x - x;
+                mGrabDy = mSelected.y - y;
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            }
+        } else if (action == MotionEvent.ACTION_POINTER_DOWN && mSelected != null && e.getPointerCount() == 2) {
+            mPinchStart = (float) Math.hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1));
+            mPinchRadius = mSelected.r;
+        } else if (action == MotionEvent.ACTION_MOVE && mSelected != null) {
+            if (e.getPointerCount() >= 2 && mPinchStart > 0) { // two fingers: size
+                float d = (float) Math.hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1));
+                mSelected.r = Math.max(mUnit * 0.3f, Math.min(mUnit * 2.2f, mPinchRadius * d / mPinchStart));
+            } else if (e.getPointerCount() == 1) { // one finger: place, kept on the display
+                mSelected.x = Math.max(mSelected.r, Math.min(mWidth - mSelected.r, e.getX() + mGrabDx));
+                mSelected.y = Math.max(mSelected.r, Math.min(mHeight - mSelected.r, e.getY() + mGrabDy));
+            }
+        } else if (action == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_UP) {
+            mPinchStart = 0;
+        }
+        invalidate();
+        return true;
+    }
+
+    private void drawEditor(Canvas c) {
+        c.drawColor(0x99000814);
+        // A faint grid helps line the buttons up.
+        Paint grid = new Paint();
+        grid.setColor(0x14ffffff);
+        for (float gx = mUnit; gx < mWidth; gx += mUnit) c.drawLine(gx, 0, gx, mHeight, grid);
+        for (float gy = mUnit; gy < mHeight; gy += mUnit) c.drawLine(0, gy, mWidth, gy, grid);
+        mText.setTextAlign(Paint.Align.CENTER);
+        for (Button b : mEditable) {
+            boolean sel = b == mSelected;
+            mFill.setColor(sel ? 0xb0e60012 : 0x70ffffff);
+            c.drawCircle(b.x, b.y, b.r, mFill);
+            mRing.setColor(sel ? 0xffffd21f : 0xc0ffffff);
+            mRing.setAlpha(0xff);
+            c.drawCircle(b.x, b.y, b.r, mRing);
+            float size = mText.getTextSize();
+            if (b.label.length() > 2) mText.setTextSize(b.r * 0.55f);
+            mText.setAlpha(0xff);
+            c.drawText(b.label, b.x, b.y - (mText.descent() + mText.ascent()) / 2, mText);
+            mText.setTextSize(size);
+        }
+        mRing.setColor(0x60ffffff);
+        // Where the stick appears (not movable: it follows the thumb on the left half).
+        mRing.setAlpha(0x50);
+        c.drawCircle(mUnit * 2.2f, mHeight - mUnit * 2.2f, mUnit * 1.2f, mRing);
+        // Toolbar, top centre: − + Reset Cancel Save.
+        float th = mUnit * 0.8f, tw = mUnit * 1.6f, small = mUnit * 0.8f, gap = mUnit * 0.2f;
+        float total = small * 2 + tw * 3 + gap * 4, x = (mWidth - total) / 2, y = mUnit * 0.9f;
+        Paint pill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        for (int i = 0; i < mTools.length; i++) {
+            float wdt = i < 2 ? small : tw;
+            mTools[i].set(x, y, x + wdt, y + th);
+            pill.setColor(i == 4 ? 0xffe60012 : i == 2 ? 0xff3a3f4a : 0xe6ffffff);
+            c.drawRoundRect(mTools[i], th / 2, th / 2, pill);
+            mText.setColor(i == 4 || i == 2 ? 0xffffffff : 0xff11151c);
+            float size = mText.getTextSize();
+            mText.setTextSize(th * 0.42f);
+            c.drawText(TOOL_LABELS[i], mTools[i].centerX(), mTools[i].centerY() - (mText.descent() + mText.ascent()) / 2,
+                    mText);
+            mText.setTextSize(size);
+            x += wdt + gap;
+        }
+        mText.setColor(0xc0ffffff);
+        float size = mText.getTextSize();
+        mText.setTextSize(mUnit * 0.3f);
+        c.drawText("Drag a button to move it · pinch or − / + to resize", mWidth / 2f, y + th + mUnit * 0.55f, mText);
+        mText.setTextSize(size);
     }
 
     private static void place(Button b, float x, float y, float r) {
@@ -205,7 +374,10 @@ final class ControlsView extends View {
     // without voice chat.
     private boolean hidden(Button b, boolean race) {
         if (b.bits == MIC) return !mVoice;
-        return b.bits == NET ? race : mGamepadMode && b.bits != SWAP && b.bits != SCREENS;
+        if (b.bits == NET) return race;
+        if ((b.bits & OWN) != 0 || b.bits == Native.START || b.bits == Native.SELECT) return mGamepadMode && !mTouchAlways
+                && b.bits != OPT;
+        return !race || (mGamepadMode && !mTouchAlways); // the game's buttons: in races
     }
 
     boolean isGamepadMode() {
@@ -241,7 +413,15 @@ final class ControlsView extends View {
     }
 
     private void send() {
-        Native.setInput(mTouchButtons | mPadButtons | mStickButtons | mPulseButtons, mTouching, mTouchX, mTouchY);
+        int buttons = mTouchButtons | mPadButtons | mStickButtons | mPulseButtons;
+        // Auto-accelerate: A held while the player drives (not in the title screen's demos, not during the countdown,
+        // where holding A would rev the engine, and not after the goal), except while braking (B) and for a moment
+        // when A itself is touched, so that the touch is a fresh press (the pause menu takes A).
+        if (mAutoAccel && Native.isDriving() && (buttons & Native.B) == 0) {
+            if (android.os.SystemClock.uptimeMillis() >= mAReleaseUntil) buttons |= Native.A;
+            else buttons &= ~Native.A;
+        }
+        Native.setInput(buttons, mTouching, mTouchX, mTouchY);
     }
 
     // Buttons under a point: slightly larger than drawn, so that a thumb between A and R holds both.
@@ -266,6 +446,7 @@ final class ControlsView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent e) {
+        if (mEditing) return editTouch(e);
         int action = e.getActionMasked();
         int index = e.getActionIndex();
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
@@ -276,23 +457,17 @@ final class ControlsView extends View {
             int bits = buttonsAt(x, y);
             if (bits != 0) {
                 f.role = ROLE_BUTTONS;
-                if ((bits & SCREENS) != 0) {
-                    mSingle = !mSingle;
-                    mSwapped = false;
-                    mScreens.label = mSingle ? "1" : "2";
-                    getContext().getSharedPreferences("mkds", Context.MODE_PRIVATE).edit()
-                            .putBoolean("single_screen", mSingle).apply();
-                    applyScreens();
-                } else if ((bits & SWAP) != 0) {
-                    mSwapped = !mSwapped;
-                    applyScreens();
-                } else if ((bits & NET) != 0 && mOnNetwork != null) {
+                if ((bits & NET) != 0 && mOnNetwork != null) {
                     mOnNetwork.run();
                 } else if ((bits & MIC) != 0 && mOnMic != null) {
                     mOnMic.run();
+                } else if ((bits & OPT) != 0 && mOnOptions != null) {
+                    post(mOnOptions);
                 }
-            } else if (mTouchRect.width() > 0 && mTouchRect.contains(x, y)) {
+            } else if (touchRect() && mTouchRect.contains(x, y)) {
                 f.role = ROLE_STYLUS;
+            } else if (!Native.isRace()) {
+                f.role = ROLE_NONE; // outside the touch screen's part, in menus
             } else if (mGamepadMode) {
                 // The screen touched outside the touch screen with the gamepad's controls on: the on-screen controls
                 // come back (also when a built-in device was taken for a gamepad).
@@ -332,6 +507,8 @@ final class ControlsView extends View {
             case ROLE_STICK:
                 buttons |= stickDirection(f);
                 break;
+            case ROLE_NONE:
+                break;
             case ROLE_STYLUS:
                 touching = true;
                 mTouchX = clamp((int) ((f.x - mTouchRect.left) * 256 / mTouchRect.width()), 255);
@@ -342,12 +519,24 @@ final class ControlsView extends View {
                 break;
             }
         }
-        if ((buttons & ~mTouchButtons) != 0) performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+        if (mHaptics && (buttons & ~mTouchButtons) != 0) performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+        if (mAutoAccel && (buttons & ~mTouchButtons & Native.A) != 0) {
+            mAReleaseUntil = android.os.SystemClock.uptimeMillis() + 60;
+            postDelayed(this::send, 70);
+        }
         mTouchButtons = buttons;
         mTouching = touching;
         send();
         invalidate();
         return true;
+    }
+
+    // Where the renderer put the touch screen's part: false when there is none (races).
+    private boolean touchRect() {
+        Native.touchRect(mTouchRectRaw);
+        mTouchRect.set(mTouchRectRaw[0], mTouchRectRaw[1], mTouchRectRaw[0] + mTouchRectRaw[2],
+                mTouchRectRaw[1] + mTouchRectRaw[3]);
+        return mTouchRectRaw[2] > 0 && mTouchRectRaw[3] > 0;
     }
 
     private static int clamp(int v, int max) {
@@ -356,6 +545,10 @@ final class ControlsView extends View {
 
     @Override
     protected void onDraw(Canvas c) {
+        if (mEditing) {
+            drawEditor(c);
+            return;
+        }
         int pressed = mTouchButtons | mPadButtons | mStickButtons;
         boolean race = Native.isRace();
         for (Button b : mButtons) {
@@ -363,6 +556,10 @@ final class ControlsView extends View {
             boolean on = (b.bits & OWN) == 0 && (pressed & b.bits) == b.bits;
             mFill.setColor(on ? 0x80ffffff : b.bits == NET && mOnline ? 0x7030a060
                     : b.bits == MIC ? (mMicOn ? 0x7030a060 : 0x70a03030) : 0x38000000);
+            float alpha = (b.bits & OWN) == 0 ? mOpacity : 1f;
+            mFill.setAlpha(Math.round(mFill.getAlpha() * alpha));
+            mRing.setAlpha(Math.round(0x60 * alpha));
+            mText.setAlpha(Math.round(0xc0 * alpha));
             c.drawCircle(b.x, b.y, b.r, mFill);
             c.drawCircle(b.x, b.y, b.r, mRing);
             float size = mText.getTextSize();
@@ -370,6 +567,8 @@ final class ControlsView extends View {
             c.drawText(b.label, b.x, b.y - (mText.descent() + mText.ascent()) / 2, mText);
             mText.setTextSize(size);
         }
+        mRing.setAlpha(0x60);
+        mText.setAlpha(0xc0);
         if (mOnline && !race && mPlayers != 0) {
             // Next to NET: who is there.
             float size = mText.getTextSize();
@@ -393,7 +592,7 @@ final class ControlsView extends View {
             mFill.setColor(0x70ffffff);
             c.drawCircle(f.x, f.y, mUnit * 0.5f, mFill);
         }
-        if (!mGamepadMode && (mFingers.size() == 0 || !hasStick())) {
+        if (race && (!mGamepadMode || mTouchAlways) && (mFingers.size() == 0 || !hasStick())) {
             // Where the stick goes.
             mRing.setAlpha(0x30);
             c.drawCircle(mUnit * 2.2f, mHeight - mUnit * 2.2f, mUnit * 1.2f, mRing);

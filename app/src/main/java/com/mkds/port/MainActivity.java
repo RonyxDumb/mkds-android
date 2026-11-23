@@ -24,7 +24,7 @@ import java.io.RandomAccessFile;
 
 /** Asks for the ROM once, then runs the game full screen. */
 public class MainActivity extends Activity implements SurfaceHolder.Callback {
-    private static final int PICK_ROM = 1;
+    private static final int PICK_ROM = 1, EXPORT_SAVE = 2, IMPORT_SAVE = 3, ADD_MOD = 4;
     private static boolean sStarted;
 
     private ControlsView mControls;
@@ -98,6 +98,17 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == ADD_MOD) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) finishAddMod(data.getData());
+            return;
+        }
+        if (requestCode == EXPORT_SAVE || requestCode == IMPORT_SAVE) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                if (requestCode == EXPORT_SAVE) finishExport(data.getData());
+                else finishImport(data.getData());
+            }
+            return;
+        }
         if (requestCode != PICK_ROM) return;
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
             finish();
@@ -180,11 +191,48 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         return 0;
     }
 
+    // The save file: the game's own, or the active mod's (each mod has its own).
+    private File saveFile() {
+        String mod = Mods.saveSuffix(this);
+        return new File(getFilesDir(), mod == null ? "mkds.sav" : "mkds-" + mod + ".sav");
+    }
+
+    private File mGameRom;
+
     private void startGame() {
+        if (!sStarted && mGameRom == null) {
+            // With a mod: its ROM is made first (a few seconds, the first time).
+            if (Mods.active(this).isEmpty()) {
+                mGameRom = romFile();
+            } else {
+                android.app.ProgressDialog wait = android.app.ProgressDialog.show(this, "Mod",
+                        "Preparing " + Mods.active(this) + "…", true, false);
+                new Thread(() -> {
+                    File rom = Mods.romForGame(this, romFile());
+                    runOnUiThread(() -> {
+                        wait.dismiss();
+                        mGameRom = rom;
+                        startGame();
+                    });
+                }).start();
+                return;
+            }
+        }
         if (!sStarted) {
-            Native.setLanguage(mLanguage);
+            // An imported save file replaces the current one before the game reads it.
+            File imported = new File(getFilesDir(), "mkds.sav.import");
+            if (imported.isFile()) {
+                File old = new File(getFilesDir(), "mkds.sav.before-import");
+                old.delete();
+                saveFile().renameTo(old);
+                if (!imported.renameTo(saveFile())) old.renameTo(saveFile());
+            }
+            // The language, and the options the game reads at its start (port/platform/os.c).
+            // 0x200: one screen (what the game shows on two screens is made for one, gl/present.c).
+            Native.setLanguage(mLanguage | 0x200 | (OptionsScreen.unlockAll(this) ? 0x100 : 0));
+            applyGraphics();
             mOnline.applyVolume();
-            String err = Native.start(romFile().getAbsolutePath(), new File(getFilesDir(), "mkds.sav").getAbsolutePath());
+            String err = Native.start(mGameRom.getAbsolutePath(), saveFile().getAbsolutePath());
             if (err != null) {
                 new AlertDialog.Builder(this).setTitle("Mario Kart DS").setMessage(err)
                         .setPositiveButton("Quit", (d, w) -> finish()).setCancelable(false).show();
@@ -193,13 +241,14 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             sStarted = true;
             mOnline.applyName();
         }
-        FrameLayout root = new FrameLayout(this);
+        FrameLayout root = mRoot = new FrameLayout(this);
         SurfaceView surface = new SurfaceView(this);
         surface.getHolder().addCallback(this);
         mControls = new ControlsView(this);
         mControls.setOnNetwork(mOnline::showSettings);
         mControls.setOnline(mOnline.isOnline());
         mControls.setOnMic(mOnline::toggleMic);
+        mControls.setOnOptions(this::showOptions);
         updateVoice();
         root.addView(surface);
         root.addView(mControls);
@@ -214,9 +263,207 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
-    // Back does not leave the game: in a race it pauses (START), elsewhere it does nothing.
+    // Back does not leave the game: in a race it pauses (START), elsewhere it does nothing. It closes the options.
     private void onGameBack() {
+        if (mControls != null && mControls.isEditing()) {
+            mControls.cancelEditing();
+            return;
+        }
+        if (mOptions != null) {
+            mOptions.close();
+            return;
+        }
         if (mControls != null && Native.isRace()) mControls.pulse(Native.START);
+    }
+
+    // ------------------------------------------------------------------------------------------ options
+    private FrameLayout mRoot;
+    private OptionsScreen mOptions;
+
+    private void showOptions() {
+        if (mOptions != null || mRoot == null) return;
+        if (sStarted) Native.setPaused(true); // also writes the save file
+        mOptions = new OptionsScreen(this, new OptionsScreen.Host() {
+            @Override
+            public void onOptionsChanged() {
+                if (mControls != null) mControls.applyOptions();
+                applyGraphics();
+                preferHighRefreshRate();
+            }
+
+            @Override
+            public void onOptionsClosed() {
+                mOptions = null;
+                if (mControls != null) mControls.setVisibility(View.VISIBLE);
+                if (sStarted && mResumed) Native.setPaused(false);
+                hideSystemBars();
+            }
+
+            @Override
+            public void exportSave() {
+                Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("application/octet-stream");
+                intent.putExtra(Intent.EXTRA_TITLE, "mkds.sav");
+                startActivityForResult(intent, EXPORT_SAVE);
+            }
+
+            @Override
+            public void importSave() {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("*/*");
+                startActivityForResult(intent, IMPORT_SAVE);
+            }
+
+            @Override
+            public void restartGame() {
+                MainActivity.this.restartGame();
+            }
+
+            @Override
+            public void addMod() {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("*/*");
+                startActivityForResult(intent, ADD_MOD);
+            }
+
+            @Override
+            public void editLayout() {
+                // The editor is drawn by the controls over the paused game; the options come back after it.
+                if (mOptions != null) mOptions.close();
+                if (mControls == null) return;
+                if (sStarted) Native.setPaused(true);
+                mControls.setVisibility(View.VISIBLE);
+                mControls.startEditing(() -> {
+                    if (sStarted && mResumed) Native.setPaused(false);
+                    showOptions();
+                });
+            }
+
+            @Override
+            public void onModChosen() {
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle(Mods.active(MainActivity.this).isEmpty() ? "Original game" : Mods.active(MainActivity.this))
+                        .setMessage("The game restarts to load it.")
+                        .setPositiveButton("Restart now", (d, w) -> MainActivity.this.restartGame())
+                        .setNegativeButton("Later", null)
+                        .show();
+            }
+        });
+        if (mControls != null) mControls.setVisibility(View.INVISIBLE);
+        mRoot.addView(mOptions.view(), new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+        mOptions.view().bringToFront();
+    }
+
+    private void applyGraphics() {
+        Native.setGraphics(OptionsScreen.maxScale(this), OptionsScreen.highFrameRate(this));
+    }
+
+    // The save file as the game last wrote it (the game is paused while the options are open, which writes it).
+    private void finishExport(Uri uri) {
+        try (InputStream in = new java.io.FileInputStream(saveFile());
+             OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
+            byte[] buf = new byte[1 << 16];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            toast("Save file exported");
+        } catch (Exception e) {
+            toast("Export failed: " + e.getMessage());
+        }
+    }
+
+    // A save file from elsewhere (an export, or a DS / emulator save of the European game: 256 KiB flash). It takes
+    // the place of the current one at the next start (the old one is kept as mkds.sav.before-import).
+    private void finishImport(Uri uri) {
+        File dst = new File(getFilesDir(), "mkds.sav.import");
+        try {
+            copy(uri, dst);
+        } catch (Exception e) {
+            dst.delete();
+            toast("Import failed: " + e.getMessage());
+            return;
+        }
+        long size = dst.length();
+        if (size < 0x2000 || size > 0x80000) {
+            dst.delete();
+            toast("This is not a Mario Kart DS save file (" + size + " bytes)");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Import save file")
+                .setMessage("The imported save replaces your current progress. The game restarts to load it.")
+                .setPositiveButton("Restart now", (d, w) -> restartGame())
+                .setNegativeButton("Cancel", (d, w) -> dst.delete())
+                .setCancelable(false)
+                .show();
+    }
+
+    // A mod chosen in the file picker: an xdelta patch or a patched ROM, added in the background.
+    private void finishAddMod(Uri uri) {
+        String file = uri.getLastPathSegment() == null ? "Mod" : uri.getLastPathSegment();
+        try (android.database.Cursor c = getContentResolver().query(uri,
+                new String[] {android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst() && c.getString(0) != null) file = c.getString(0);
+        } catch (Exception ignored) {
+        }
+        final String name = Mods.nameFor(file.substring(file.lastIndexOf('/') + 1));
+        android.app.ProgressDialog wait = new android.app.ProgressDialog(this);
+        wait.setTitle("Adding " + name);
+        wait.setMessage("Reading…");
+        wait.setProgressStyle(android.app.ProgressDialog.STYLE_HORIZONTAL);
+        wait.setMax(100);
+        wait.setCancelable(false);
+        wait.show();
+        new Thread(() -> {
+            String message;
+            boolean ok;
+            try {
+                message = Mods.add(this, uri, name, romFile(),
+                        (what, percent) -> runOnUiThread(() -> {
+                            wait.setMessage(what + "…");
+                            wait.setProgress(percent);
+                        }));
+                ok = true;
+            } catch (Exception e) {
+                message = e.getMessage() == null ? e.toString() : e.getMessage();
+                ok = false;
+            }
+            final String text = message;
+            final boolean added = ok;
+            runOnUiThread(() -> {
+                wait.dismiss();
+                if (mOptions != null) mOptions.refreshMods();
+                AlertDialog.Builder b = new AlertDialog.Builder(this)
+                        .setTitle(added ? name + " added" : "The mod could not be added")
+                        .setMessage(text);
+                if (added) {
+                    b.setPositiveButton("Use it now", (d, w) -> {
+                        Mods.setActive(this, name);
+                        restartGame();
+                    }).setNegativeButton("Later", (d, w) -> {
+                        if (mOptions != null) mOptions.refreshMods();
+                    });
+                } else {
+                    b.setPositiveButton("OK", null);
+                }
+                b.show();
+            });
+        }).start();
+    }
+
+    private void toast(String text) {
+        android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show();
+    }
+
+    // Starts the app again in a new process: the game reads its options and the save file at its start.
+    private void restartGame() {
+        if (sStarted) Native.setPaused(true); // writes the save file first
+        Intent intent = Intent.makeRestartActivityTask(getComponentName());
+        startActivity(intent);
+        Runtime.getRuntime().exit(0);
     }
 
     @Override
@@ -232,11 +479,15 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private void preferHighRefreshRate() {
         android.view.Display display = getWindowManager().getDefaultDisplay();
         android.view.Display.Mode current = display.getMode(), best = current;
+        boolean high = OptionsScreen.highFrameRate(this);
         for (android.view.Display.Mode m : display.getSupportedModes()) {
-            if (m.getPhysicalWidth() == current.getPhysicalWidth() && m.getPhysicalHeight() == current.getPhysicalHeight()
-                    && m.getRefreshRate() > best.getRefreshRate()) {
-                best = m;
+            if (m.getPhysicalWidth() != current.getPhysicalWidth() || m.getPhysicalHeight() != current.getPhysicalHeight()) {
+                continue;
             }
+            // The fastest mode; at 60 fps the one nearest 60 Hz.
+            boolean better = high ? m.getRefreshRate() > best.getRefreshRate()
+                                  : Math.abs(m.getRefreshRate() - 60f) < Math.abs(best.getRefreshRate() - 60f);
+            if (better) best = m;
         }
         mRefreshRate = best.getRefreshRate();
         android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
@@ -335,7 +586,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         mResumed = true;
         updateVoice();
         holdWifi(true);
-        if (sStarted) Native.setPaused(false);
+        if (sStarted && mOptions == null) Native.setPaused(false);
     }
 
     @Override
@@ -454,6 +705,17 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (mLanguageScreen != null && mLanguageScreen.onKey(event)) return true;
+        if (mOptions != null) return mOptions.onKey(event) || super.dispatchKeyEvent(event);
+        if (mControls != null && mControls.isEditing()) {
+            if (event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B && event.getAction() == KeyEvent.ACTION_DOWN) {
+                mControls.cancelEditing();
+            }
+            return true;
+        }
+        if (event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_MODE && event.getAction() == KeyEvent.ACTION_DOWN) {
+            showOptions(); // the gamepad's home / guide button
+            return true;
+        }
         int button = buttonFor(event.getKeyCode());
         if (button == 0 || mControls == null) return super.dispatchKeyEvent(event);
         if (event.isFromSource(InputDevice.SOURCE_GAMEPAD) || event.isFromSource(InputDevice.SOURCE_JOYSTICK)) {

@@ -123,6 +123,23 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setPaused(JNIEnv *env, jclass c
     }
 }
 
+// The options screen: the largest 3D scale (0 = as the display needs) and frame interpolation above 60 Hz.
+JNIEXPORT void JNICALL Java_com_mkds_port_Native_setGraphics(JNIEnv *env, jclass cls, jint max_scale,
+                                                             jboolean interpolate) {
+    (void) env, (void) cls;
+    extern void android_render_set_options(int max_scale, bool interpolate);
+    android_render_set_options(max_scale, interpolate);
+}
+
+// One screen: where the touch screen's part of the picture is (surface pixels x, y, w, h; w 0 when there is none).
+JNIEXPORT void JNICALL Java_com_mkds_port_Native_touchRect(JNIEnv *env, jclass cls, jfloatArray out) {
+    (void) cls;
+    extern void present_one_touch_rect(float *out);
+    float r[4];
+    present_one_touch_rect(r);
+    (*env)->SetFloatArrayRegion(env, out, 0, 4, r);
+}
+
 // Widescreen: the race view's aspect ratio (the whole display); applies from the next race.
 JNIEXPORT void JNICALL Java_com_mkds_port_Native_setWideAspect(JNIEnv *env, jclass cls, jfloat aspect) {
     (void) env, (void) cls;
@@ -159,6 +176,13 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setGameVolume(JNIEnv *env, jcla
 }
 
 // Whether the game shows a race (the activity picks the screen layout from it).
+// The player drives a race (auto-accelerate): after the countdown, before the goal, not in a demo.
+JNIEXPORT jboolean JNICALL Java_com_mkds_port_Native_isDriving(JNIEnv *env, jclass cls) {
+    (void) env, (void) cls;
+    extern bool present_is_driving(void);
+    return present_is_driving();
+}
+
 JNIEXPORT jboolean JNICALL Java_com_mkds_port_Native_isRace(JNIEnv *env, jclass cls) {
     (void) env, (void) cls;
     extern bool present_is_race(void);

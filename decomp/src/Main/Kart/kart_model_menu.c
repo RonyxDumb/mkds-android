@@ -385,7 +385,13 @@ void RefreshCameraProjection(Camera *camera) {
     camera->mFrustumLeft = MUL_FIXED12_NO_ROUND(-camera->mFrustumTop, camera->mAspectRatio);
     top = camera->mFrustumTop;
     bottom = camera->mFrustumBottom;
+#ifdef PLATFORM_PORT
+    // One screen: the pair of cameras of the intros (one for each screen, the view split between them) both show the
+    // whole view, centred, on the one screen.
+    switch (port_option(PORT_OPTION_ONE_SCREEN) ? CAMERA_FRUSTUM_SHIFT_NONE : camera->mFrustumShift) {
+#else
     switch (camera->mFrustumShift) {
+#endif
         case CAMERA_FRUSTUM_SHIFT_UP:
             top <<= 1;
             bottom = -top;

@@ -31,8 +31,8 @@ void vram_map_build(VramMap *map, const uint8_t vramcnt[10]);
 // Pointer to `offset` in region, or NULL. Offsets within a page are contiguous only up to the page end (16 KiB).
 const uint8_t *vram_ptr(const VramMap *map, const uint8_t *vram, int region, uint32_t offset);
 
-// Widest line: 256 DS columns plus up to 128 more on each side (widescreen).
-#define GPU2D_MAX_W 512
+// Widest line: 256 DS columns plus up to 384 more on each side (widescreen, one screen).
+#define GPU2D_MAX_W 1024
 
 // Renders both screens (RGBA, 0xAABBGGRR, 192 lines). layer3d: the 3D layer of engine A (256x192, alpha in 0..31 <<
 // 24, colour in RGB888), NULL for none. The output order is top screen, bottom screen (POWCNT1 bit 15 chooses which
@@ -46,6 +46,21 @@ void gpu2d_render(const FrameSnapshot *f, const uint32_t *layer3d, uint32_t *top
 void gpu2d_render_split(const FrameSnapshot *f, uint32_t *engine_a_above, uint32_t *engine_a_below,
                         uint32_t *engine_b, int margin_a, int margin_b);
 bool gpu2d_engine_a_on_top(const FrameSnapshot *f);
+
+// One screen made of both (gl/present.c): an engine's picture with only some of its layers. keep: GPU2D_KEEP_BG(n),
+// _OBJ, _BD (the backdrop). Pixels where only left-out layers would show are transparent (0); in split mode (below not
+// NULL, engine A with 3D) `below` holds GPU2D_EMPTY there instead. The 3D layer goes with BG0 in split mode.
+#define GPU2D_KEEP_BG(n) (1u << (n))
+#define GPU2D_KEEP_OBJ 0x10u
+#define GPU2D_KEEP_BD 0x20u
+#define GPU2D_KEEP_ALL 0x3fu
+#define GPU2D_EMPTY 0x00ff00ffu
+void gpu2d_render_part(const FrameSnapshot *f, bool engine_a, unsigned keep, uint32_t *out, uint32_t *below,
+                       int margin);
+// The 2D background layer behind the others (the 3D layer left out): BG number, -1 none.
+int gpu2d_back_layer_2d(const FrameSnapshot *f, bool engine_a);
+// The layers that are on: bits 0-3 BG0-3, bit 4 OBJ.
+unsigned gpu2d_layers_on(const FrameSnapshot *f, bool engine_a);
 
 // Software 3D rasteriser at the DS resolution (host tests and fallback).
 void soft3d_render(const Gx3dFrame *frame, const FrameSnapshot *f, uint32_t *out);

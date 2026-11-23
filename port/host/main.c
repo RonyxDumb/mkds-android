@@ -109,11 +109,17 @@ static bool on_frame(const FrameSnapshot *f, uint64_t n) {
         fwrite(audio, 4, (size_t) samples, s_wav);
         s_wav_frames += (uint32_t) samples;
     }
+    bool dump = s_dump_every && n % s_dump_every == 0 &&
+                (!getenv("MKDS_DUMP_FROM") || n >= (uint64_t) atoi(getenv("MKDS_DUMP_FROM")));
+    if (!dump && ((f->io[0x67] & 0x80) || getenv("MKDS_EVERY"))) {
+        extern void host_capture_frame(const FrameSnapshot *f);
+        host_capture_frame(f);
+    }
     if (s_dump_every && n % s_dump_every == 0 && (!getenv("MKDS_DUMP_FROM") || n >= (uint64_t) atoi(getenv("MKDS_DUMP_FROM")))) {
         char path[512];
         snprintf(path, sizeof(path), "%s/frame_%05llu.png", s_out, (unsigned long long) n);
         host_write_frame(f, path);
-        port_log("frame %llu (scene %d, capcnt %02x%02x%02x%02x): DISPCNT A %08x B %08x, 3D %u polygons, POWCNT %04x", (unsigned long long) n, f->scene, f->io[0x67], f->io[0x66], f->io[0x65], f->io[0x64],
+        port_log("frame %llu (scene %d%s, capcnt %02x%02x%02x%02x): DISPCNT A %08x B %08x, 3D %u polygons, POWCNT %04x", (unsigned long long) n, f->scene, f->driving ? " driving" : "", f->io[0x67], f->io[0x66], f->io[0x65], f->io[0x64],
                  *(uint32_t *) f->io, *(uint32_t *) (f->io + 0x1000), f->frame3d.polygon_count,
                  *(uint16_t *) (f->io + 0x304));
     }
@@ -164,8 +170,23 @@ static void parse_press(const char *spec) {
 extern void (*g_port_vblank_hook)(void) __attribute__((weak));
 extern uint64_t g_frame_count __attribute__((weak));
 void FinishRaceProgressKartWithEndKind(int32_t kartIndex, int32_t endKind) __attribute__((weak));
+int GetCurrentSceneNumber(void) __attribute__((weak));
 static uint64_t s_finish_at;
 static void finish_hook(void) {
+    static uint64_t every = 0;
+    if (!every && getenv("MKDS_FINISH_EVERY")) every = strtoull(getenv("MKDS_FINISH_EVERY"), NULL, 0);
+    // MKDS_FINISH_WIN: the player's kart first, the others half a second later.
+    static int win = -1;
+    if (win < 0) win = getenv("MKDS_FINISH_WIN") != NULL;
+    if (s_finish_at && every && g_frame_count > s_finish_at && GetCurrentSceneNumber() == 2) {
+        uint64_t phase = (g_frame_count - s_finish_at) % every;
+        if (phase == 0) {
+            for (int k = win ? 0 : 0; k < (win ? 1 : 8); k++) FinishRaceProgressKartWithEndKind(k, 0);
+            port_log("test: race finished");
+        } else if (win && phase == 30) {
+            for (int k = 1; k < 8; k++) FinishRaceProgressKartWithEndKind(k, 0);
+        }
+    }
     if (s_finish_at && g_frame_count == s_finish_at) {
         for (int k = 0; k < 8; k++) FinishRaceProgressKartWithEndKind(k, 0);
         port_log("test: race finished");
@@ -187,6 +208,7 @@ int main(int argc, char **argv) {
         g_port_vblank_hook = finish_hook;
     }
 #endif
+    int lang = 1;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--frames") && i + 1 < argc) s_frames = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--dump-every") && i + 1 < argc) s_dump_every = strtoull(argv[++i], NULL, 0);
@@ -195,7 +217,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--press") && i + 1 < argc) parse_press(argv[++i]);
         else if (!strcmp(argv[i], "--realtime")) rate = 59826;
         else if (!strcmp(argv[i], "--bglog")) s_bglog = true;
-        else if (!strcmp(argv[i], "--lang") && i + 1 < argc) guest_set_language(atoi(argv[++i]));
+        else if (!strcmp(argv[i], "--lang") && i + 1 < argc) lang = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--wide") && i + 1 < argc) {
             extern float g_host_aspect;
             g_host_aspect = (float) atof(argv[++i]);
@@ -212,6 +234,8 @@ int main(int argc, char **argv) {
             wav_header(s_wav, 0);
         }
     }
+    // MKDS_ONE: as the phone app, one screen (the game told through its options, see port_option).
+    guest_set_language(lang | (getenv("MKDS_ONE") ? 0x200 : 0));
     mkdir(s_out, 0755);
 #ifdef PORT_IPC
     // Two processes, as on arm64 Android: mkds_server (next to this program) runs the game in real time.

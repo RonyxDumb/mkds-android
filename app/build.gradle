@@ -11,8 +11,8 @@ android {
         applicationId 'com.mkds.port'
         minSdk 26
         targetSdk 35
-        versionCode 28
-        versionName '0.28'
+        versionCode 33
+        versionName '0.33'
         externalNativeBuild {
             cmake {
                 arguments '-DANDROID_STL=none'
@@ -49,10 +49,25 @@ android {
         prefab true
     }
 
+    // One key for every build (CI and local): Android installs an update only over an app signed with the same key,
+    // and a different key forces an uninstall, which deletes the save file. The key is public on purpose (an
+    // unofficial build anyone can make); MKDS_KEYSTORE etc. replace it with a private one.
+    signingConfigs {
+        release {
+            storeFile file(System.getenv('MKDS_KEYSTORE') ?: 'keystore/release.jks')
+            storePassword System.getenv('MKDS_KEYSTORE_PASSWORD') ?: 'mkdsport'
+            keyAlias System.getenv('MKDS_KEY_ALIAS') ?: 'mkds'
+            keyPassword System.getenv('MKDS_KEY_PASSWORD') ?: 'mkdsport'
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
+        }
+        debug {
+            signingConfig signingConfigs.release
         }
     }
 
@@ -76,5 +91,7 @@ android {
 }
 
 dependencies {
+    // .xz decompression for xdelta patches (Mods, Vcdiff); public domain
+    implementation 'org.tukaani:xz:1.9'
     questImplementation 'org.khronos.openxr:openxr_loader_for_android:1.1.47'
 }

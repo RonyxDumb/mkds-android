@@ -23,6 +23,8 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 file(GLOB_RECURSE DECOMP_INPUTS CONFIGURE_DEPENDS ${DECOMP}/src/*.c ${DECOMP}/libs/*.c ${DECOMP}/include/types.h
      ${DECOMP}/config/${DECOMP_VERSION}/arm9/overlays/*/delinks.txt)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${REPO}/tools/portify.py ${CMAKE_CURRENT_SOURCE_DIR}/exclude.txt)
+# An edited decomp source is prepared again (portify.py writes gen/ at configure time).
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${DECOMP_INPUTS})
 execute_process(
     COMMAND ${Python3_EXECUTABLE} ${REPO}/tools/portify.py ${DECOMP} ${GEN} ${CMAKE_CURRENT_SOURCE_DIR}/exclude.txt ${DECOMP_VERSION}
     RESULT_VARIABLE PORTIFY_RESULT)

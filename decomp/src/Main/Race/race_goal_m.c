@@ -463,6 +463,9 @@ void UploadRaceStartGpOam(void) {
     DC_FlushRange(&gRaceStartGp->mMainOam, 0x400);
     GX_LoadOAM(&gRaceStartGp->mMainOam, 0, 0x400);
     powerBit = (reg_GX_POWCNT & 0x8000) >> 15;
+#ifdef PLATFORM_PORT
+    if (port_option(PORT_OPTION_ONE_SCREEN)) powerBit = 1; // one screen: the course name on every frame
+#endif
     if (powerBit != 0) {
         if (powerBit == 1) {
             displayBits = (reg_GX_DISPCNT & REG_GX_DISPCNT_DISPLAY_MASK) >> 8;

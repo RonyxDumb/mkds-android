@@ -16,3 +16,8 @@ void present_set_target(uint32_t framebuffer);
 void present_set_wide(float aspect);
 bool present_is_race(void); // the last snapshot was a race frame
 bool present_engine_a_on_top(void);
+// One screen (the layout's two rectangles the same): where the touch screen's part is, surface pixels (x, y, w, h;
+// w = 0: nothing to touch).
+void present_one_touch_rect(float *out);
+// The screens drawn as the layout says (no one-screen composition).
+void present_draw_screens(const int layout[8], int w, int h, float t);

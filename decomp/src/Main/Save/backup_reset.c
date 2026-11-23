@@ -11,6 +11,53 @@
 #include "01/Menu/record_time_attack.h"
 #include "01/Menu/record_time_attack_requests.h"
 #include "Main/Save/ghost_record_file.h"
+#ifdef PLATFORM_PORT
+#include "Main/Save/course_time_record.h"
+#include "Main/Save/grand_prix_record_get.h"
+#include "Main/Race/gp_records_killer.h"
+#include "Main/System/backup_net_camera_work.h"
+#include "cpu_copy_fill.h"
+
+// The app's "unlock everything": each Grand Prix record without a gold trophy becomes one with gold and three stars
+// (grade 7) under the save file's name, then the game sets the flags such records earn (characters, karts, cups,
+// classes) and everything is written back, as after a Grand Prix.
+static void PortUnlockAll(void) {
+    s32 cup, engineClass;
+    BOOL changed = FALSE;
+    for (cup = 0; cup < 8; cup++) {
+        for (engineClass = 0; engineClass < 4; engineClass++) {
+            TimeRecord record;
+            GetGrandPrixRecord(cup, engineClass, &record);
+            if (record.mFilled != 0 && record.mCupRank == 0 && record.mGrade == 7) continue;
+            MI_CpuCopy8(gBackupBuffers->mFirstBlock->mPlayerName, record.mName, sizeof(record.mName));
+            record.mMinute = 5;
+            record.mSecond = 0;
+            record.mMillisecond = 0;
+            if (record.mFilled == 0) {
+                record.mCharacterIndex = 0;
+                record.mKartIndex = 0;
+            }
+            record.mUnk_1b = 0;
+            record.mCupRank = 0;
+            record.mTotalPoints = 40;
+            record.mGrade = 7;
+            record.mFilled = 1;
+            SetGrandPrixRecord(cup, engineClass, &record);
+            changed = TRUE;
+        }
+    }
+    SetSecretMessageFlags();
+    if (changed) {
+        WriteBackupFirstBlockAndRecords(); // clears the busy state
+    } else {
+        WriteBackupFirstBlock(gBackupBuffers->mFirstBlock);
+        if (gBackupAccess->mBackupEnabled != 0) {
+            CARD_WaitBackupAsync();
+        }
+        ClearBackupBusy();
+    }
+}
+#endif
 
 #pragma thumb on
 
@@ -84,6 +131,12 @@ void ReadBackupFirstBlockAndRecords(void) {
         }
     }
     gBackupBuffers->mFailedBlockBits = failedBlockBits;
+#ifdef PLATFORM_PORT
+    if (port_option(PORT_OPTION_UNLOCK_ALL) && gBackupBuffers->mReadStatus == 0) {
+        PortUnlockAll();
+        return;
+    }
+#endif
     ClearBackupBusy();
 }
 

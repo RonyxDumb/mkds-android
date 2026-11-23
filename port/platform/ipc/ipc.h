@@ -58,6 +58,7 @@ static inline void ipc_copy_snapshot(FrameSnapshot *dst, const FrameSnapshot *sr
     __builtin_memcpy(&b->vertex_count, &a->vertex_count, sizeof(Gx3dFrame) - offsetof(Gx3dFrame, vertex_count));
     dst->number = src->number;
     dst->scene = src->scene;
+    dst->driving = src->driving;
     dst->time_ns = src->time_ns;
 }
 

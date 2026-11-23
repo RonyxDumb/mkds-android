@@ -136,6 +136,8 @@ typedef struct Engine {
     // A still picture as the extended layer: beyond the DS screen it shows its edge colours, blurred vertically
     // (per line, BGR555 | 0x8000 when opaque), fading a little towards the outside, instead of repeating.
     const uint16_t *side[2];
+    // One screen (gpu2d_render_part): the layers drawn, GPU2D_KEEP_* bits; what only the others cover is transparent.
+    uint8_t keep;
 } Engine;
 
 static inline uint16_t fade555(uint16_t c, int d, int margin) {
@@ -191,8 +193,15 @@ static void draw_text_bg(const Engine *e, int bg, int y, uint16_t *out) {
     int x0, x1;
     bg_span(e, bg, &x0, &x1);
     out += e->margin;
-    for (int x = x0; x < x1; x++) {
-        if ((x < 0 || x > 255) && e->side[0]) {
+    // Race HUD in widescreen: a band that crosses the whole DS screen on this line (the goal screen's checkered
+    // strip) continues to the sides, its map repeating as it scrolls.
+    int ranges[3][2] = {{x0, x1}, {-e->margin, 0}, {256, 256 + e->margin}};
+    for (int range = 0; range < 3; range++) {
+    if (range == 1 && !(e->hud_shift && bg != e->ext_bg && e->margin > 0 && (out[0] & 0x8000) && (out[255] & 0x8000))) {
+        break;
+    }
+    for (int x = ranges[range][0]; x < ranges[range][1]; x++) {
+        if ((x < 0 || x > 255) && e->side[0] && range == 0) {
             out[x] = fade555(e->side[x > 255][y], x < 0 ? -x : x - 255, e->margin);
             continue;
         }
@@ -217,6 +226,7 @@ static void draw_text_bg(const Engine *e, int bg, int y, uint16_t *out) {
             color = e->pal[(entry >> 12) * 16 + idx];
         }
         out[x] = (color & 0x7fff) | 0x8000;
+    }
     }
 }
 
@@ -356,6 +366,16 @@ static void plan_hud_shift(Engine *e) {
     for (int i = 0; i < 128; i++) {
         if (!on[i]) continue;
         int g = group[i], w = gx1[g] - gx0[g], cx = (gx0[g] + gx1[g]) / 2;
+        // A group that reaches a side of the DS screen (and not the other half) belongs to that side, however wide:
+        // the goal screen's "TIME" and "LAP 1" rows (label and digits) go with the lap rows under them.
+        if (gx1[g] >= 232 && gx0[g] >= 64) {
+            e->obj_shift[i] = 1;
+            continue;
+        }
+        if (gx0[g] <= 24 && gx1[g] <= 192) {
+            e->obj_shift[i] = -1;
+            continue;
+        }
         if (w > 128) continue; // spans the screen
         if (cx < 72) e->obj_shift[i] = -1;
         else if (cx > 184) e->obj_shift[i] = 1;
@@ -544,10 +564,11 @@ static void render_engine_line(const Engine *e, int y, const uint32_t *layer3d, 
     for (int bg = 0; bg < 4; bg++) {
         if (!(e->dispcnt & (0x100u << bg))) continue;
         if (bg == 0 && bg0_3d) continue;
+        if (!(e->keep & (1u << bg))) continue;
         draw_bg_line(e, bg, y, line.bg[bg]);
     }
     (void) mode;
-    if (e->dispcnt & 0x1000) {
+    if ((e->dispcnt & 0x1000) && (e->keep & GPU2D_KEEP_OBJ)) {
         draw_objs(e, y, &line);
     }
     uint8_t mask[GPU2D_MAX_W];
@@ -597,6 +618,7 @@ static void render_engine_line(const Engine *e, int y, const uint32_t *layer3d, 
             if (i3 == 0) {
                 // 3D on top: what is under it, and how they combine.
                 down = color[1] & 0xffffff;
+                if (top[1] == LAYER_BD && !(e->keep & GPU2D_KEEP_BD)) down = GPU2D_EMPTY;
                 bool second = (bldcnt >> (8 + top[1])) & 1;
                 uint32_t w = 0;
                 if (second) {
@@ -607,7 +629,7 @@ static void render_engine_line(const Engine *e, int y, const uint32_t *layer3d, 
                 if (effects && (bldcnt & 1) && (effect == 2 || effect == 3)) {
                     up = (effect == 2 ? 0xffffffu : 0) | (evy * 255 / 16) << 24; // brighten / darken over 3D
                 }
-                below[x] = down | w << 24;
+                below[x] = down == GPU2D_EMPTY ? GPU2D_EMPTY : down | w << 24;
             } else {
                 uint32_t c = color[0];
                 bool first = (bldcnt >> top[0]) & 1;
@@ -672,6 +694,13 @@ static void render_engine_line(const Engine *e, int y, const uint32_t *layer3d, 
         bool effects = mask[x] & 0x20;
         bool first = (bldcnt >> top[0]) & 1;
         bool second = (bldcnt >> (8 + top[1])) & 1;
+        if (!(e->keep & GPU2D_KEEP_BD)) {
+            if (top[0] == LAYER_BD) { // nothing that is drawn here: transparent
+                out[x] = 0;
+                continue;
+            }
+            if (top[1] == LAYER_BD) second = false; // no blending with what is not drawn
+        }
         if (top[0] == LAYER_OBJ && line.obj_alpha[x] != 0xff && second) {
             // Semi-transparent and bitmap sprites blend whatever the effect setting.
             uint32_t a = line.obj_alpha[x] == 0xfe ? eva : line.obj_alpha[x] + 1;
@@ -698,7 +727,9 @@ static void master_brightness(uint16_t reg, uint32_t *line, int width) {
     if (factor > 16) factor = 16;
     if (!factor || mode == 0 || mode == 3) return;
     for (int x = 0; x < width; x++) {
-        line[x] = mode == 1 ? brighten(line[x], factor) : darken(line[x], factor);
+        uint32_t a = line[x] & 0xff000000u;
+        if (!a) continue; // nothing drawn here (the race map's parts): stays transparent
+        line[x] = ((mode == 1 ? brighten(line[x], factor) : darken(line[x], factor)) & 0xffffff) | a;
     }
 }
 
@@ -718,8 +749,9 @@ static int bottom_layer(const Engine *e) {
 }
 
 static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a, const uint32_t *layer3d,
-                          uint32_t *out, uint32_t *below, int margin) {
+                          uint32_t *out, uint32_t *below, int margin, uint8_t keep) {
     Engine e;
+    e.keep = keep;
     e.f = f;
     e.map = map;
     e.is_a = is_a;
@@ -734,6 +766,7 @@ static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a,
     e.hud_shift = margin > 0 && is_a && f->scene == 2 && (e.dispcnt & 8);
     if (e.hud_shift) plan_hud_shift(&e);
     e.ext_bg = margin > 0 ? bottom_layer(&e) : -1;
+    if (e.ext_bg >= 0 && e.ext_bg < 4 && !(keep & (1u << e.ext_bg))) e.ext_bg = -1;
     if (e.ext_bg == 4) e.ext_bg = -1;
     e.side[0] = e.side[1] = NULL;
     if (e.ext_bg >= 0) {
@@ -760,6 +793,18 @@ static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a,
                 edge[1][y] = row[margin + 255];
             }
             e.ext_bg = bg;
+            // A picture whose right edge runs on into its left edge (menu backgrounds: gradients, checkers, stripes)
+            // goes on as it is drawn, repeating; only one that does not (an illustration) is continued blurred.
+            int seamless = 0, lines = 0;
+            for (int y = 0; y < 192; y++) {
+                uint16_t l = edge[0][y], r = edge[1][y];
+                if (!((l | r) & 0x8000)) continue;
+                lines++;
+                int d = abs((l & 31) - (r & 31)) + abs(((l >> 5) & 31) - ((r >> 5) & 31)) +
+                        abs(((l >> 10) & 31) - ((r >> 10) & 31));
+                if ((l & 0x8000) && (r & 0x8000) && d <= 6) seamless++;
+            }
+            if (lines && seamless * 100 >= lines * 85) goto no_side;
             for (int k = 0; k < 2; k++) {
                 for (int y = 0; y < 192; y++) {
                     int sum[3] = {0, 0, 0}, n = 0, opaque = 0;
@@ -780,6 +825,7 @@ static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a,
             }
             e.side[0] = side[0];
             e.side[1] = side[1];
+        no_side:;
         }
     }
     int width = 256 + 2 * margin;
@@ -791,7 +837,8 @@ static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a,
     for (int y = 0; y < 192; y++) {
         uint32_t *line = out + y * width;
         if (forced_blank || display == 0) {
-            for (int x = 0; x < width; x++) line[x] = 0xffffffffu; // white
+            // White; nothing in a part of the picture (one screen).
+            for (int x = 0; x < width; x++) line[x] = keep == GPU2D_KEEP_ALL ? 0xffffffffu : 0;
             if (below) memset(below + y * width, 0, (size_t) width * 4);
             continue;
         }
@@ -831,16 +878,47 @@ void gpu2d_render(const FrameSnapshot *f, const uint32_t *layer3d, uint32_t *top
     vram_map_build(&map, f->vramcnt);
     uint16_t powcnt = (uint16_t) (f->io[0x304] | f->io[0x305] << 8);
     bool a_on_top = powcnt & 0x8000;
-    render_engine(f, &map, true, layer3d, a_on_top ? top : bottom, NULL, a_on_top ? top_margin : 0);
-    render_engine(f, &map, false, NULL, a_on_top ? bottom : top, NULL, a_on_top ? 0 : top_margin);
+    render_engine(f, &map, true, layer3d, a_on_top ? top : bottom, NULL, a_on_top ? top_margin : 0, GPU2D_KEEP_ALL);
+    render_engine(f, &map, false, NULL, a_on_top ? bottom : top, NULL, a_on_top ? 0 : top_margin, GPU2D_KEEP_ALL);
 }
 
 void gpu2d_render_split(const FrameSnapshot *f, uint32_t *engine_a_above, uint32_t *engine_a_below,
                         uint32_t *engine_b, int margin_a, int margin_b) {
     VramMap map;
     vram_map_build(&map, f->vramcnt);
-    render_engine(f, &map, true, GPU2D_SPLIT, engine_a_above, engine_a_below, margin_a);
-    render_engine(f, &map, false, NULL, engine_b, NULL, margin_b);
+    render_engine(f, &map, true, GPU2D_SPLIT, engine_a_above, engine_a_below, margin_a, GPU2D_KEEP_ALL);
+    render_engine(f, &map, false, NULL, engine_b, NULL, margin_b, GPU2D_KEEP_ALL);
+}
+
+void gpu2d_render_part(const FrameSnapshot *f, bool engine_a, unsigned keep, uint32_t *out, uint32_t *below,
+                       int margin) {
+    VramMap map;
+    vram_map_build(&map, f->vramcnt);
+    render_engine(f, &map, engine_a, below ? GPU2D_SPLIT : NULL, out, below, margin, (uint8_t) keep);
+}
+
+int gpu2d_back_layer_2d(const FrameSnapshot *f, bool engine_a) {
+    Engine e;
+    e.is_a = engine_a;
+    e.io = f->io + (engine_a ? 0 : 0x1000);
+    e.dispcnt = io32(&e, 0);
+    int best = -1, best_prio = -1;
+    for (int bg = 0; bg < 4; bg++) {
+        if (!(e.dispcnt & (0x100u << bg))) continue;
+        if (bg == 0 && engine_a && (e.dispcnt & 8)) continue; // the 3D layer
+        int prio = io16(&e, 0x08 + bg * 2) & 3;
+        if (prio >= best_prio) {
+            best_prio = prio;
+            best = bg;
+        }
+    }
+    return best;
+}
+
+unsigned gpu2d_layers_on(const FrameSnapshot *f, bool engine_a) {
+    const uint8_t *io = f->io + (engine_a ? 0 : 0x1000);
+    uint32_t dispcnt = (uint32_t) io[0] | io[1] << 8 | io[2] << 16 | (uint32_t) io[3] << 24;
+    return (dispcnt >> 8) & 0x1f;
 }
 
 // ------------------------------------------------------------------------------------------------ capture

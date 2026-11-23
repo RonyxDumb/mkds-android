@@ -27,6 +27,12 @@ final class Native {
 
     static native void setPaused(boolean paused);
 
+    /** The options screen: the largest 3D scale (0 = as the display needs) and frame interpolation above 60 Hz. */
+    static native void setGraphics(int maxScale, boolean interpolate);
+
+    /** One screen: where the touch screen's part of the picture is (x, y, w, h in surface pixels; w 0: none). */
+    static native void touchRect(float[] out);
+
     /** Widescreen: the aspect ratio of the race view (the whole display). */
     static native void setWideAspect(float aspect);
 
@@ -38,6 +44,9 @@ final class Native {
 
     /** The game's volume, 0 to 100 percent (the voice chat keeps its own). */
     static native void setGameVolume(int percent);
+
+    /** The player drives a race: after the countdown, before the goal, not in a demo (auto-accelerate). */
+    static native boolean isDriving();
 
     /** Whether the game is showing a race (the layout depends on it). */
     static native boolean isRace();

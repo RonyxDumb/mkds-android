@@ -10,7 +10,7 @@ DS hardware replaced by a native platform layer (OpenGL ES 3 graphics, native so
 ## Features
 - Native performance on 32-bit and 64-bit ARM phones
 - High-resolution 3D rendering
-- Full widescreen: races, menus and award ceremonies fill the whole display
+- One widescreen screen: the two DS screens are made into one picture that fills the display (see below)
 - 120 fps (and higher) on high refresh rate displays, through frame interpolation
 - Touch controls designed for phones, with a floating stick
 - Gamepad support (USB and Bluetooth); on-screen controls hide automatically
@@ -27,7 +27,10 @@ DS hardware replaced by a native platform layer (OpenGL ES 3 graphics, native so
 ## Installation
 1. Download the APK from the [Releases](../../releases) page and install it.
 2. On first launch, select your ROM file. It is copied into the app's private storage; the original is not modified.
-3. Play. Saves are kept in the app's storage and survive updates.
+3. Play. Saves are kept in the app's storage and survive updates (from 0.29 every build is signed with the same key:
+   an update installs over the app; earlier builds had a different key each, and an uninstall deletes the save).
+   **⚙ → Export save file** keeps a copy anywhere you like; **Import save file** loads one (also a save of the European
+   game from a DS or an emulator).
 
 ## Controls
 | Touch | Action |
@@ -38,15 +41,53 @@ DS hardware replaced by a native platform layer (OpenGL ES 3 graphics, native so
 | **L** | Use item |
 | **X**, **Y** | As on the DS |
 | **SELECT**, **START** | As on the DS |
-| ⇄ | Swap the screens: the touch screen becomes large, for menus |
 | **MIC** (with voice chat) | Microphone on / off |
 | **NET** (outside races) | Network settings: local or online play |
-| Touch screen (inset) | Stylus input |
+| **⚙** | Options (also the gamepad's home button) |
+| The menus' choices (right part of the picture) | Stylus input |
 
 The Android back gesture pauses the game during a race and does nothing elsewhere.
 
-With a gamepad connected, the on-screen controls are hidden (the screen swap button stays). If the gamepad
+With a gamepad connected, the on-screen controls are hidden (the options button stays). If the gamepad
 disconnects during a race, the game pauses and the touch controls come back. L2/R2 also work as L/R.
+
+## Mods
+**⚙ → Mods → Add a mod…** takes an **.xdelta** patch made for Mario Kart DS (Europe), the usual way ROM hacks are
+shared, or a ROM already patched; the app applies the patch to your ROM itself. Choose the mod in the list (or None)
+and the game restarts with it. Each mod keeps its own save file.
+
+The game's code here is the port's (the decompilation compiled for the phone), not the ROM's, so a mod brings its
+files: every file of the game that the mod changes (graphics, models, courses that take the place of the original
+ones, music, texts) is used. Courses, cups and menus that a mod adds with its own code are not: with CTGP Nitro, for
+example, its title, menus and artwork and its versions of the original courses are there, its new courses are not. When
+a mod changes the game's code, its sound archive is left out too (its sounds go with its code).
+
+## One screen
+The game fills the display, without empty bars:
+- **Races** (and their pause): the race view fills the display; the touch screen's map shows round in the lower right
+  corner, with the ranking and the time over it. After the goal, the results and their menu (Next course, Replay,
+  Quit) take that place, and can be touched.
+- **Grand Prix intros and the award ceremony**, which the DS shows with two cameras across both screens: one camera,
+  one view.
+- **Menus**: the two screens side by side as the game draws them, each filling its half of the display; touch the
+  right one. Outside races the game's buttons and the stick are not shown.
+
+## Options
+**⚙** opens the options over the paused game: sections on the left, their settings on the right (touch, or a gamepad:
+L/R change the section).
+- **Graphics**: frame rate (60 fps, or the display's maximum with interpolated frames), 3D resolution (auto or 1× to
+  4×).
+- **Controls**: on-screen controls hidden with a gamepad or always shown, auto-accelerate (A held in races, B still
+  brakes, only while you drive: not in the title screen's demos nor during the countdown), the drift button above A or
+  large and apart, button size and opacity, vibration, and **Edit layout**: drag the buttons where you want them, pinch
+  (or − / +) to resize, Save keeps the layout, Reset brings back the original one.
+- **Game**: unlock everything (every Grand Prix gets a gold trophy with three stars in the save file, which unlocks
+  every cup, class, character and kart; applied when the game starts, it restarts for it), export and import of the
+  save file.
+- **Mods**: the mods added, the active one, and Add a mod (see Mods).
+
+The app's icon is an adaptive icon with a monochrome layer: with themed icons on (Android 13+), it takes the colours of
+the wallpaper (Material You).
 
 ## Local multiplayer
 1. Connect both phones to the same Wi-Fi network (a hotspot from one of them works too).

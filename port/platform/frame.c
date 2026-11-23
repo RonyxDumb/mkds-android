@@ -41,6 +41,8 @@ static void capture(FrameSnapshot *f) {
     size_t header = offsetof(Gx3dFrame, vertex_count);
     memcpy((uint8_t *) d + header, (const uint8_t *) g + header, sizeof(Gx3dFrame) - header);
     f->scene = (uint8_t) GetCurrentSceneNumber();
+    extern int port_race_driving(void); // decomp Main/Race/race.c
+    f->driving = f->scene == 2 && port_race_driving();
     f->time_ns = hapi_now_ns();
     f->number = ++s_number;
 }

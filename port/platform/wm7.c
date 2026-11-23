@@ -901,8 +901,8 @@ static void deliver_port_data(u16 port, u16 aid, const u8 *mac, u16 mp_seq, cons
 #define DS_GAME_MESSAGE 5           // offset of the byte that is sent once (SharingSendRecord.mSendByte)
 #define DS_DEADLINE_PERCENT 85      // of the frame: when the parent stops waiting for records
 #define DS_OUT_MAX 30               // sets on their way to a child at most (they wait in its queue of MAX_HELD)
-#define DS_SURPLUS_FRAMES 120       // records waiting for this many frames: one frame of delay is taken out
-#define DS_SURPLUS_FRAMES_DEEP 15   // the same with three or more waiting
+#define DS_SURPLUS_FRAMES 30        // records waiting for this many frames: one frame of delay is taken out
+#define DS_SURPLUS_FRAMES_DEEP 4    // the same with three or more waiting (delay piled up by a burst of late packets)
 
 static bool link_slow(const Link *l) { return l->srtt_ns >= DS_SLOW_NS; }
 
