@@ -438,7 +438,7 @@ static void poll_udp(void) {
 // Each connection of the DS ends here. Segments to the DS are sent while its window allows and sent again from the
 // oldest unacknowledged byte when no acknowledgement comes (its receive ring can drop a frame); segments from the DS
 // are taken in order only, so that a missing one is simply sent again by the DS.
-#define TCP_CONNS 8
+#define TCP_CONNS 16
 #define TCP_OUT 32768 // from the internet, waiting for the DS's acknowledgement
 #define TCP_IN 8192   // from the DS, waiting to be sent on
 enum { T_FREE, T_CONNECTING, T_OPEN, T_CLOSING };
@@ -546,6 +546,14 @@ static void on_tcp(const u8 *ip, const u8 *th, u32 len) {
         }
         for (int i = 0; i < TCP_CONNS && !t; i++) {
             if (s_tcp[i].state == T_FREE) t = &s_tcp[i];
+        }
+        if (!t) { // all in use: the one idle the longest makes room
+            for (int i = 0; i < TCP_CONNS; i++) {
+                if (!t || s_tcp[i].last_ms < t->last_ms) t = &s_tcp[i];
+            }
+            if (WFC_LOG) port_log("wfc: too many TCP connections, the oldest is closed");
+            tcp_reset(t->ip, t->port, t->ds_port, t->snd_nxt, t->rcv_nxt);
+            tcp_free(t);
         }
         if (!t) {
             tcp_reset(dst, dport, sport, 0, seq + 1);
@@ -659,6 +667,13 @@ static void poll_tcp(void) {
             } else if (k < 0) {
                 t->remote_eof = true;
             }
+        }
+        // The DS closed its side (and all it sent went on): the connection ends here too, also when the server
+        // would keep it open (GameSpy's servers do); what the DS has not taken yet is dropped.
+        if (t->ds_fin && t->in_len == 0 && !t->remote_eof) {
+            t->remote_eof = true;
+            u32 sent = t->snd_nxt - t->snd_una;
+            if (t->out_len > sent) t->out_len = sent;
         }
         // From the internet.
         while (!t->local && !t->remote_eof && t->out_len < TCP_OUT) {
