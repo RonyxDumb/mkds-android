@@ -78,8 +78,9 @@ L/R change the section).
 - **Graphics**: frame rate (60 fps, or the display's maximum with interpolated frames), 3D resolution (auto or 1× to
   4×).
 - **Controls**: on-screen controls hidden with a gamepad or always shown, auto-accelerate (A held in races, B still
-  brakes: one thumb steers, the other drifts with R), the drift button above A or large and apart, button size and
-  opacity, vibration.
+  brakes, only while you drive: not in the title screen's demos nor during the countdown), the drift button above A or
+  large and apart, button size and opacity, vibration, and **Edit layout**: drag the buttons where you want them, pinch
+  (or − / +) to resize, Save keeps the layout, Reset brings back the original one.
 - **Game**: unlock everything (every Grand Prix gets a gold trophy with three stars in the save file, which unlocks
   every cup, class, character and kart; applied when the game starts, it restarts for it), export and import of the
   save file.

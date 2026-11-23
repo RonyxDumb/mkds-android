@@ -159,9 +159,176 @@ final class ControlsView extends View {
         place(mOpt, w / 2f + u * 2.6f, u * 0.4f, u * 0.38f);
         place(mNet, w / 2f - u * 2.6f, u * 0.4f, u * 0.38f);
         place(mMic, w / 2f - u * 3.6f, u * 0.4f, u * 0.38f);
+        applyCustomLayout();
         mText.setTextSize(u * 0.42f);
         mRing.setStrokeWidth(u * 0.06f);
         invalidate();
+    }
+
+    // ------------------------------------------------------------------------------------------ layout editor
+    // The game's buttons can be moved and resized (Options > Controls > Edit layout): each one's place is kept in the
+    // preferences as "layout_<label>" = x/width, y/height, radius/height, so that it fits any display; Reset removes
+    // them all (the layout above comes back).
+    private final Button[] mEditable = {mA, mB, mX, mY, mL, mR, mStart, mSelect};
+    private boolean mEditing;
+    private Runnable mOnEditDone;
+    private Button mSelected;
+    private float mGrabDx, mGrabDy, mPinchStart, mPinchRadius;
+    private final RectF[] mTools = {new RectF(), new RectF(), new RectF(), new RectF(), new RectF()};
+    private static final String[] TOOL_LABELS = {"−", "+", "Reset", "Cancel", "Save"};
+
+    private void applyCustomLayout() {
+        android.content.SharedPreferences prefs = OptionsScreen.prefs(getContext());
+        for (Button b : mEditable) {
+            String v = prefs.getString("layout_" + b.label, null);
+            if (v == null) continue;
+            String[] parts = v.split(",");
+            if (parts.length != 3) continue;
+            try {
+                b.x = Float.parseFloat(parts[0]) * mWidth;
+                b.y = Float.parseFloat(parts[1]) * mHeight;
+                b.r = Float.parseFloat(parts[2]) * mHeight;
+            } catch (NumberFormatException ignored) {
+            }
+        }
+    }
+
+    boolean isEditing() {
+        return mEditing;
+    }
+
+    /** Back while editing: the editor closes without saving. */
+    void cancelEditing() {
+        if (mEditing) stopEditing(false);
+    }
+
+    /** Shows the layout editor; done runs when it is closed (saved or not). */
+    void startEditing(Runnable done) {
+        mEditing = true;
+        mOnEditDone = done;
+        mSelected = mA;
+        mFingers.clear();
+        mTouchButtons = 0;
+        send();
+        invalidate();
+    }
+
+    private void stopEditing(boolean save) {
+        if (save) {
+            android.content.SharedPreferences.Editor ed = OptionsScreen.prefs(getContext()).edit();
+            for (Button b : mEditable) {
+                ed.putString("layout_" + b.label, (b.x / mWidth) + "," + (b.y / mHeight) + "," + (b.r / mHeight));
+            }
+            ed.apply();
+        }
+        mEditing = false;
+        layoutScreens(mWidth, mHeight); // saved places, or the ones before
+        if (mOnEditDone != null) mOnEditDone.run();
+    }
+
+    private void resetLayout() {
+        android.content.SharedPreferences.Editor ed = OptionsScreen.prefs(getContext()).edit();
+        for (Button b : mEditable) ed.remove("layout_" + b.label);
+        ed.apply();
+        layoutScreens(mWidth, mHeight);
+    }
+
+    private boolean editTouch(MotionEvent e) {
+        int action = e.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            float x = e.getX(), y = e.getY();
+            for (int i = 0; i < mTools.length; i++) {
+                if (!mTools[i].contains(x, y)) continue;
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                switch (i) {
+                    case 0: if (mSelected != null) mSelected.r = Math.max(mUnit * 0.3f, mSelected.r * 0.9f); break;
+                    case 1: if (mSelected != null) mSelected.r = Math.min(mUnit * 2.2f, mSelected.r * 1.1f); break;
+                    case 2: resetLayout(); break;
+                    case 3: stopEditing(false); return true;
+                    default: stopEditing(true); return true;
+                }
+                invalidate();
+                return true;
+            }
+            mSelected = null;
+            float best = Float.MAX_VALUE;
+            for (Button b : mEditable) { // the nearest button under the finger
+                float d = (float) Math.hypot(x - b.x, y - b.y);
+                if (d <= Math.max(b.r, mUnit * 0.6f) && d < best) {
+                    best = d;
+                    mSelected = b;
+                }
+            }
+            if (mSelected != null) {
+                mGrabDx = mSelected.x - x;
+                mGrabDy = mSelected.y - y;
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            }
+        } else if (action == MotionEvent.ACTION_POINTER_DOWN && mSelected != null && e.getPointerCount() == 2) {
+            mPinchStart = (float) Math.hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1));
+            mPinchRadius = mSelected.r;
+        } else if (action == MotionEvent.ACTION_MOVE && mSelected != null) {
+            if (e.getPointerCount() >= 2 && mPinchStart > 0) { // two fingers: size
+                float d = (float) Math.hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1));
+                mSelected.r = Math.max(mUnit * 0.3f, Math.min(mUnit * 2.2f, mPinchRadius * d / mPinchStart));
+            } else if (e.getPointerCount() == 1) { // one finger: place, kept on the display
+                mSelected.x = Math.max(mSelected.r, Math.min(mWidth - mSelected.r, e.getX() + mGrabDx));
+                mSelected.y = Math.max(mSelected.r, Math.min(mHeight - mSelected.r, e.getY() + mGrabDy));
+            }
+        } else if (action == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_UP) {
+            mPinchStart = 0;
+        }
+        invalidate();
+        return true;
+    }
+
+    private void drawEditor(Canvas c) {
+        c.drawColor(0x99000814);
+        // A faint grid helps line the buttons up.
+        Paint grid = new Paint();
+        grid.setColor(0x14ffffff);
+        for (float gx = mUnit; gx < mWidth; gx += mUnit) c.drawLine(gx, 0, gx, mHeight, grid);
+        for (float gy = mUnit; gy < mHeight; gy += mUnit) c.drawLine(0, gy, mWidth, gy, grid);
+        mText.setTextAlign(Paint.Align.CENTER);
+        for (Button b : mEditable) {
+            boolean sel = b == mSelected;
+            mFill.setColor(sel ? 0xb0e60012 : 0x70ffffff);
+            c.drawCircle(b.x, b.y, b.r, mFill);
+            mRing.setColor(sel ? 0xffffd21f : 0xc0ffffff);
+            mRing.setAlpha(0xff);
+            c.drawCircle(b.x, b.y, b.r, mRing);
+            float size = mText.getTextSize();
+            if (b.label.length() > 2) mText.setTextSize(b.r * 0.55f);
+            mText.setAlpha(0xff);
+            c.drawText(b.label, b.x, b.y - (mText.descent() + mText.ascent()) / 2, mText);
+            mText.setTextSize(size);
+        }
+        mRing.setColor(0x60ffffff);
+        // Where the stick appears (not movable: it follows the thumb on the left half).
+        mRing.setAlpha(0x50);
+        c.drawCircle(mUnit * 2.2f, mHeight - mUnit * 2.2f, mUnit * 1.2f, mRing);
+        // Toolbar, top centre: − + Reset Cancel Save.
+        float th = mUnit * 0.8f, tw = mUnit * 1.6f, small = mUnit * 0.8f, gap = mUnit * 0.2f;
+        float total = small * 2 + tw * 3 + gap * 4, x = (mWidth - total) / 2, y = mUnit * 0.9f;
+        Paint pill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        for (int i = 0; i < mTools.length; i++) {
+            float wdt = i < 2 ? small : tw;
+            mTools[i].set(x, y, x + wdt, y + th);
+            pill.setColor(i == 4 ? 0xffe60012 : i == 2 ? 0xff3a3f4a : 0xe6ffffff);
+            c.drawRoundRect(mTools[i], th / 2, th / 2, pill);
+            mText.setColor(i == 4 || i == 2 ? 0xffffffff : 0xff11151c);
+            float size = mText.getTextSize();
+            mText.setTextSize(th * 0.42f);
+            c.drawText(TOOL_LABELS[i], mTools[i].centerX(), mTools[i].centerY() - (mText.descent() + mText.ascent()) / 2,
+                    mText);
+            mText.setTextSize(size);
+            x += wdt + gap;
+        }
+        mText.setColor(0xc0ffffff);
+        float size = mText.getTextSize();
+        mText.setTextSize(mUnit * 0.3f);
+        c.drawText("Drag a button to move it · pinch or − / + to resize", mWidth / 2f, y + th + mUnit * 0.55f, mText);
+        mText.setTextSize(size);
     }
 
     private static void place(Button b, float x, float y, float r) {
@@ -247,9 +414,10 @@ final class ControlsView extends View {
 
     private void send() {
         int buttons = mTouchButtons | mPadButtons | mStickButtons | mPulseButtons;
-        // Auto-accelerate: A held in races, except while braking (B) and for a moment when A itself is touched, so
-        // that the touch is a fresh press (the pause menu and the end of a race take A).
-        if (mAutoAccel && Native.isRace() && (buttons & Native.B) == 0) {
+        // Auto-accelerate: A held while the player drives (not in the title screen's demos, not during the countdown,
+        // where holding A would rev the engine, and not after the goal), except while braking (B) and for a moment
+        // when A itself is touched, so that the touch is a fresh press (the pause menu takes A).
+        if (mAutoAccel && Native.isDriving() && (buttons & Native.B) == 0) {
             if (android.os.SystemClock.uptimeMillis() >= mAReleaseUntil) buttons |= Native.A;
             else buttons &= ~Native.A;
         }
@@ -278,6 +446,7 @@ final class ControlsView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent e) {
+        if (mEditing) return editTouch(e);
         int action = e.getActionMasked();
         int index = e.getActionIndex();
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
@@ -376,6 +545,10 @@ final class ControlsView extends View {
 
     @Override
     protected void onDraw(Canvas c) {
+        if (mEditing) {
+            drawEditor(c);
+            return;
+        }
         int pressed = mTouchButtons | mPadButtons | mStickButtons;
         boolean race = Native.isRace();
         for (Button b : mButtons) {

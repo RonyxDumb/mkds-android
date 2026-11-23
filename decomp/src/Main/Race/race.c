@@ -525,6 +525,24 @@ u32 IsRaceStarted(void) {
     return (gRace->mStarted);
 }
 
+#ifdef PLATFORM_PORT
+#include "Main/Race/kart.h"
+// The app's auto-accelerate (port/platform/frame.c): the player drives a race: not a demo (the title screen's),
+// replay, award or staff roll, after the countdown and before the player's goal.
+int port_race_driving(void) {
+    if (gRace == NULL || gRaceSetup == NULL) return 0;
+    switch (gRaceSetup->mRaceKind) {
+        case RACE_KIND_DEMO:
+        case RACE_KIND_REPLAY:
+        case RACE_KIND_AWARD:
+        case RACE_KIND_STAFF_ROLL:
+            return 0;
+    }
+    if (!gRace->mStarted) return 0;
+    return !IsKartEnded(GetFollowedKartOrEntryIndex());
+}
+#endif
+
 void StartRace(void) {
     gRace->mStarted = 1;
     StartRaceClock();

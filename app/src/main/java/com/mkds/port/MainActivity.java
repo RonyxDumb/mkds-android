@@ -265,6 +265,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
     // Back does not leave the game: in a race it pauses (START), elsewhere it does nothing. It closes the options.
     private void onGameBack() {
+        if (mControls != null && mControls.isEditing()) {
+            mControls.cancelEditing();
+            return;
+        }
         if (mOptions != null) {
             mOptions.close();
             return;
@@ -323,6 +327,19 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
                 intent.setType("*/*");
                 startActivityForResult(intent, ADD_MOD);
+            }
+
+            @Override
+            public void editLayout() {
+                // The editor is drawn by the controls over the paused game; the options come back after it.
+                if (mOptions != null) mOptions.close();
+                if (mControls == null) return;
+                if (sStarted) Native.setPaused(true);
+                mControls.setVisibility(View.VISIBLE);
+                mControls.startEditing(() -> {
+                    if (sStarted && mResumed) Native.setPaused(false);
+                    showOptions();
+                });
             }
 
             @Override
@@ -689,6 +706,12 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (mLanguageScreen != null && mLanguageScreen.onKey(event)) return true;
         if (mOptions != null) return mOptions.onKey(event) || super.dispatchKeyEvent(event);
+        if (mControls != null && mControls.isEditing()) {
+            if (event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B && event.getAction() == KeyEvent.ACTION_DOWN) {
+                mControls.cancelEditing();
+            }
+            return true;
+        }
         if (event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_MODE && event.getAction() == KeyEvent.ACTION_DOWN) {
             showOptions(); // the gamepad's home / guide button
             return true;

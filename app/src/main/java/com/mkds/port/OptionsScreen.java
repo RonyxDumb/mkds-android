@@ -45,6 +45,7 @@ final class OptionsScreen {
         void restartGame();
         void addMod();
         void onModChosen();
+        void editLayout();
     }
 
     static final String PREFS = "mkds";
@@ -259,6 +260,7 @@ final class OptionsScreen {
         segmented(g, "Drift button (R)", new String[] {"Above A", "Large, apart"}, bigDrift(mActivity) ? 1 : 0,
                 i -> put("big_drift", i == 1));
         LinearLayout look = group("Buttons");
+        action(look, "Edit layout", "Move and resize the on-screen buttons", mHost::editLayout);
         int[] sizes = {80, 100, 120, 140};
         segmented(look, "Size", new String[] {"S", "M", "L", "XL"}, indexOf(sizes, buttonSizePercent(mActivity)),
                 i -> putInt("button_size", sizes[i]));

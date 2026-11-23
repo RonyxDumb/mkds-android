@@ -176,6 +176,13 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setGameVolume(JNIEnv *env, jcla
 }
 
 // Whether the game shows a race (the activity picks the screen layout from it).
+// The player drives a race (auto-accelerate): after the countdown, before the goal, not in a demo.
+JNIEXPORT jboolean JNICALL Java_com_mkds_port_Native_isDriving(JNIEnv *env, jclass cls) {
+    (void) env, (void) cls;
+    extern bool present_is_driving(void);
+    return present_is_driving();
+}
+
 JNIEXPORT jboolean JNICALL Java_com_mkds_port_Native_isRace(JNIEnv *env, jclass cls) {
     (void) env, (void) cls;
     extern bool present_is_race(void);

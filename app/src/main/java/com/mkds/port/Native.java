@@ -45,6 +45,9 @@ final class Native {
     /** The game's volume, 0 to 100 percent (the voice chat keeps its own). */
     static native void setGameVolume(int percent);
 
+    /** The player drives a race: after the countdown, before the goal, not in a demo (auto-accelerate). */
+    static native boolean isDriving();
+
     /** Whether the game is showing a race (the layout depends on it). */
     static native boolean isRace();
 

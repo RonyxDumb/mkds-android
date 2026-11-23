@@ -119,7 +119,7 @@ static bool on_frame(const FrameSnapshot *f, uint64_t n) {
         char path[512];
         snprintf(path, sizeof(path), "%s/frame_%05llu.png", s_out, (unsigned long long) n);
         host_write_frame(f, path);
-        port_log("frame %llu (scene %d, capcnt %02x%02x%02x%02x): DISPCNT A %08x B %08x, 3D %u polygons, POWCNT %04x", (unsigned long long) n, f->scene, f->io[0x67], f->io[0x66], f->io[0x65], f->io[0x64],
+        port_log("frame %llu (scene %d%s, capcnt %02x%02x%02x%02x): DISPCNT A %08x B %08x, 3D %u polygons, POWCNT %04x", (unsigned long long) n, f->scene, f->driving ? " driving" : "", f->io[0x67], f->io[0x66], f->io[0x65], f->io[0x64],
                  *(uint32_t *) f->io, *(uint32_t *) (f->io + 0x1000), f->frame3d.polygon_count,
                  *(uint16_t *) (f->io + 0x304));
     }
