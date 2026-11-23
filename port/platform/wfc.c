@@ -85,6 +85,7 @@ static void frame_end(u32 payload) {
 
 // The next frame for the DS: copied into `out` (FRAME_MAX), its length returned; 0 when none.
 static u64 s_from_ds_ns; // the DS's last frame
+static u32 s_frames_in, s_frames_out; // the log
 
 int port_wfc_next_frame(u8 *out, u8 *src_mac, u8 *dst_mac) {
     if (!s_out_count) return 0;
@@ -96,6 +97,7 @@ int port_wfc_next_frame(u8 *out, u8 *src_mac, u8 *dst_mac) {
     s_out_count--;
     memcpy(out, f->data, f->len);
     trace_frame("->", f->data, f->len);
+    s_frames_out++;
     memcpy(src_mac, k_router_mac, 6);
     memcpy(dst_mac, s_ds_mac, 6);
     return f->len;
@@ -185,7 +187,10 @@ static void on_dhcp(const u8 *b, u32 len) {
     *o++ = 0xff;
     memcpy(s_ds_mac, b + 28, 6);
     send_udp(ROUTER_IP, 67, 0xffffffffu, 68, r, (u32) (o - r));
-    if (WFC_LOG) port_log("wfc: DHCP %s", type == 1 ? "offer" : "ack");
+    if (WFC_LOG) {
+        port_log("wfc: DHCP %s (transaction %08x; %u frames from the DS, %u to it)", type == 1 ? "offer" : "ack",
+                 rd32be(b + 4), s_frames_in, s_frames_out);
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ DNS
@@ -737,6 +742,7 @@ static void trace_frame(const char *dir, const u8 *data, u32 len) {
 
 void port_wfc_frame_from_ds(const u8 *data, u32 len) {
     trace_frame("<-", data, len);
+    s_frames_in++;
     s_from_ds_ns = port_now_ns();
     if (len < 8 || data[0] != 0xaa || data[1] != 0xaa) return;
     u16 type = rd16be(data + 6);
@@ -763,6 +769,7 @@ void port_wfc_connected(const u8 *ds_mac) {
 
 // The DS left the access point: every connection ends.
 void port_wfc_disconnected(void) {
+    port_log("wfc: left the access point (%u frames from the DS, %u to it)", s_frames_in, s_frames_out);
     for (int i = 0; i < UDP_PORTS; i++) {
         if (s_udp[i].used) hapi_inet_close(s_udp[i].sock);
         s_udp[i].used = false;
