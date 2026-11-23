@@ -16,6 +16,7 @@
 // Online play uses the same datagrams: the host side carries them through a relay server instead of the local
 // network (hostside/online.h), and a broadcast reaches the stations of the room. Nothing here knows the difference,
 // except that the timers follow the measured round trip time, which is no longer a millisecond.
+#include <stdio.h>
 #include "port.h"
 #include "hostapi.h"
 
@@ -236,6 +237,7 @@ static WirelessMessage *new_message(u16 command, u16 result) {
     return (WirelessMessage *) m;
 }
 
+extern int g_ds_trace;
 int g_wm7_trace; // tests: every command and message in the log (the test build: MKDS_WMTRACE)
 #define WM7_TRACE g_wm7_trace
 static void queue(WirelessMessage *m) {
@@ -699,6 +701,18 @@ static void port_send(const u32 *p) {
         return;
     }
     u16 targets = s_parent ? (u16) (dest & 0xfffe) : (u16) (dest & 1), counted = 0;
+    if (g_ds_trace && port == 12) {
+        const u8 *b = PTR(data);
+        char hex[80] = "";
+        for (u32 i = 0; i < size && i < 24; i++) snprintf(hex + i * 2, 3, "%02x", b[i]);
+        WMArm9Buf *w9 = WMi_GetSystemWork();
+        const WMDataSharingInfo *ci = w9 ? w9->mPortCallbackArgs[12] : NULL;
+        if (!s_parent && ci) {
+            port_log("dstrace C send %u: %s  w %d rd %d snd %d st %d off %d", size, hex, ci->mWriteIndex, ci->mReadIndex,
+                     ci->mSendIndex, ci->mStatus, (int) ((const u8 *) b - (const u8 *) ci));
+        } else
+        port_log("dstrace %s send %u: %s", s_parent ? "P" : "C", size, hex);
+    }
     for (int a = 0; a < MAX_LINKS; a++) {
         if (!(targets & (1 << a)) || !s_links[a].used) continue;
         if (!link_push(&s_links[a], DATA_PORT, (u16) port, s_mp_seq, PTR(data), (u16) size, &s->link_seq[a])) {
@@ -980,12 +994,34 @@ static bool port_ready(u16 port) {
     WMArm9Buf *w = WMi_GetSystemWork();
     if (w->mPortCallbacks[port & 15] == (WirelessPortCallback) WmDataSharingReceiveCallback_Child) {
         const WMDataSharingInfo *ds = w->mPortCallbackArgs[port & 15];
-        if (ds && ((ds->mWriteIndex - ds->mReadIndex) & 3) >= 3) return false;
+        if (ds) {
+            int unread = (ds->mWriteIndex - ds->mReadIndex) & 3;
+            if (unread >= 3) return false;
+            // The block the next set goes into is also where the child puts its own record before sending it
+            // (WM_StepDataSharing): a set delivered in between (this runs at the interrupt points inside the send)
+            // wiped the record, which then went out empty: the child's keys were lost (A not held, menus not
+            // confirmed). The DS never has sets come that fast; here they come in bursts over Wi-Fi.
+            if (ds->mWriteIndex == ds->mSendIndex && unread != 0) return false;
+        }
     }
     return true;
 }
 
+int g_ds_trace;
+static WMDataSharingInfo *ds_parent(u16 port);
 static void deliver_port_data(u16 port, u16 aid, const u8 *mac, u16 mp_seq, const u8 *data, u16 size) {
+    if (g_ds_trace && port == 12) {
+        char hex[80] = "";
+        for (u32 i = 0; i < size && i < 24; i++) snprintf(hex + i * 2, 3, "%02x", data[i]);
+        WMDataSharingInfo *dsi = s_parent ? ds_parent(port) : NULL;
+        if (dsi) {
+            u16 w = dsi->mWriteIndex & 3;
+            port_log("dstrace P recv aid %d %u: %s  w %d bm %x/%x/%x/%x dbl %d rd %d snd %d", aid, size, hex, w,
+                     dsi->mDs[0].mAidBitmap, dsi->mDs[1].mAidBitmap, dsi->mDs[2].mAidBitmap, dsi->mDs[3].mAidBitmap,
+                     dsi->mDoubleMode, dsi->mReadIndex, dsi->mSendIndex);
+        } else
+        port_log("dstrace %s recv aid %d %u: %s", s_parent ? "P" : "C", aid, size, hex);
+    }
     memcpy(s_payload, data, size);
     WirelessMessage *m = new_message(WIRELESS_REQUEST_PORT_DATA, 0);
     U16(m, 4) = WIRELESS_STATE_PORT_DATA_ARRIVED;
@@ -1243,6 +1279,7 @@ static void receive_data(Link *l, const DataBody *d) {
     case DATA_MP_READY:
     case DATA_MP_STOP:
         l->mp_ready = d->kind == DATA_MP_READY;
+        if (g_ds_trace) port_log("dstrace P child %d mp %s", l->aid, l->mp_ready ? "ready" : "stop");
         update_children();
         if (l->mp_ready && s_parent) {
             // Like the DS, a child that starts MP is "connected" again for the ports (data sharing sends it the sets).
