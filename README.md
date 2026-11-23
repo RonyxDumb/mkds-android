@@ -35,7 +35,7 @@ DS hardware replaced by a native platform layer (OpenGL ES 3 graphics, native so
 ## Controls
 | Touch | Action |
 | --- | --- |
-| Left half of the screen | Floating stick (appears where your thumb lands) |
+| Stick (lower left) | Fixed stick: touch it or anywhere on the left half; Options can make it floating (it appears where your thumb lands) |
 | **A** (large) / **R** (above it) | Accelerate / drift — one thumb between them holds both |
 | **B** | Brake / reverse |
 | **L** | Use item |
@@ -79,7 +79,7 @@ L/R change the section).
   4×).
 - **Controls**: on-screen controls hidden with a gamepad or always shown, auto-accelerate (A held in races, B still
   brakes, only while you drive: not in the title screen's demos nor during the countdown), the drift button above A or
-  large and apart, button size and opacity, vibration, and **Edit layout**: drag the buttons where you want them, pinch
+  large and apart, button size and opacity, vibration, the stick fixed or floating, and **Edit layout**: drag the buttons (and the fixed stick) where you want them, pinch
   (or − / +) to resize, Save keeps the layout, Reset brings back the original one.
 - **Game**: unlock everything (every Grand Prix gets a gold trophy with three stars in the save file, which unlocks
   every cup, class, character and kart; applied when the game starts, it restarts for it), export and import of the

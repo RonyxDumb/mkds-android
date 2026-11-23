@@ -52,7 +52,7 @@ final class ControlsView extends View {
     private final Button[] mButtons = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mNet, mMic, mOpt};
     private Runnable mOnNetwork, mOnMic, mOnOptions;
     // From the options screen (OptionsScreen): see applyOptions.
-    private boolean mTouchAlways, mAutoAccel, mBigDrift, mHaptics = true;
+    private boolean mFixedStick = true, mTouchAlways, mAutoAccel, mBigDrift, mHaptics = true;
     private float mSizeScale = 1f, mOpacity = 1f;
     private long mAReleaseUntil; // auto-accelerate: A let go briefly when the A button is touched (a fresh press)
     private boolean mOnline, mVoice, mMicOn;
@@ -110,6 +110,7 @@ final class ControlsView extends View {
         mTouchAlways = OptionsScreen.touchAlways(c);
         mAutoAccel = OptionsScreen.autoAccelerate(c);
         mBigDrift = OptionsScreen.bigDrift(c);
+        mFixedStick = OptionsScreen.fixedStick(c);
         mHaptics = OptionsScreen.haptics(c);
         mSizeScale = OptionsScreen.buttonSizePercent(c) / 100f;
         mOpacity = OptionsScreen.buttonOpacityPercent(c) / 100f;
@@ -159,6 +160,7 @@ final class ControlsView extends View {
         place(mOpt, w / 2f + u * 2.6f, u * 0.4f, u * 0.38f);
         place(mNet, w / 2f - u * 2.6f, u * 0.4f, u * 0.38f);
         place(mMic, w / 2f - u * 3.6f, u * 0.4f, u * 0.38f);
+        place(mStick, u * 2.3f, h - u * 2.3f, u * 1.4f * mSizeScale);
         applyCustomLayout();
         mText.setTextSize(u * 0.42f);
         mRing.setStrokeWidth(u * 0.06f);
@@ -169,7 +171,9 @@ final class ControlsView extends View {
     // The game's buttons can be moved and resized (Options > Controls > Edit layout): each one's place is kept in the
     // preferences as "layout_<label>" = x/width, y/height, radius/height, so that it fits any display; Reset removes
     // them all (the layout above comes back).
-    private final Button[] mEditable = {mA, mB, mX, mY, mL, mR, mStart, mSelect};
+    // The stick: a fixed base (its place and size are the "STICK" button's, editable like the others).
+    private final Button mStick = new Button(0, "STICK");
+    private final Button[] mEditable = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mStick};
     private boolean mEditing;
     private Runnable mOnEditDone;
     private Button mSelected;
@@ -304,9 +308,6 @@ final class ControlsView extends View {
             mText.setTextSize(size);
         }
         mRing.setColor(0x60ffffff);
-        // Where the stick appears (not movable: it follows the thumb on the left half).
-        mRing.setAlpha(0x50);
-        c.drawCircle(mUnit * 2.2f, mHeight - mUnit * 2.2f, mUnit * 1.2f, mRing);
         // Toolbar, top centre: − + Reset Cancel Save.
         float th = mUnit * 0.8f, tw = mUnit * 1.6f, small = mUnit * 0.8f, gap = mUnit * 0.2f;
         float total = small * 2 + tw * 3 + gap * 4, x = (mWidth - total) / 2, y = mUnit * 0.9f;
@@ -436,7 +437,7 @@ final class ControlsView extends View {
     }
 
     private int stickDirection(Finger f) {
-        float dx = f.x - f.x0, dy = f.y - f.y0, dead = mUnit * 0.3f;
+        float dx = f.x - f.x0, dy = f.y - f.y0, dead = (mFixedStick ? mStick.r : mUnit * 1.2f) * 0.22f;
         int bits = 0;
         // Wide left/right sectors (steering), narrower up/down.
         if (Math.abs(dx) > dead && Math.abs(dx) > Math.abs(dy) * 0.45f) bits |= dx < 0 ? Native.LEFT : Native.RIGHT;
@@ -478,6 +479,14 @@ final class ControlsView extends View {
             } else {
                 f.role = ROLE_BUTTONS;
             }
+            if (mFixedStick && f.role != ROLE_STYLUS && f.role != ROLE_NONE && (bits & ~OWN) == 0 && Native.isRace()
+                    && Math.hypot(x - mStick.x, y - mStick.y) <= mStick.r * 1.8f) {
+                f.role = ROLE_STICK; // on the stick (wherever it was placed)
+            }
+            if (f.role == ROLE_STICK && mFixedStick) { // the base stays where it is
+                f.x0 = mStick.x;
+                f.y0 = mStick.y;
+            }
             mFingers.put(e.getPointerId(index), f);
         } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
             mFingers.remove(e.getPointerId(index));
@@ -489,7 +498,7 @@ final class ControlsView extends View {
             if (f == null) continue;
             f.x = e.getX(i);
             f.y = e.getY(i);
-            if (f.role == ROLE_STICK) {
+            if (f.role == ROLE_STICK && !mFixedStick) {
                 // The stick follows a thumb that moves far: its centre stays within reach.
                 float dx = f.x - f.x0, dy = f.y - f.y0, max = mUnit * 1.2f, d = (float) Math.hypot(dx, dy);
                 if (d > max) {
@@ -582,6 +591,10 @@ final class ControlsView extends View {
             mText.setTextAlign(Paint.Align.CENTER);
             mText.setTextSize(size);
         }
+        if (mFixedStick) {
+            if (race && (!mGamepadMode || mTouchAlways)) drawFixedStick(c);
+            return;
+        }
         // The stick under the thumb.
         for (int i = 0; i < mFingers.size(); i++) {
             Finger f = mFingers.valueAt(i);
@@ -598,6 +611,55 @@ final class ControlsView extends View {
             c.drawCircle(mUnit * 2.2f, mHeight - mUnit * 2.2f, mUnit * 1.2f, mRing);
             mRing.setAlpha(0x60);
         }
+    }
+
+    // The fixed stick: a base with the four directions marked (lit while pressed) and the knob, which follows the
+    // thumb within the base.
+    private void drawFixedStick(Canvas c) {
+        float cx = mStick.x, cy = mStick.y, r = mStick.r;
+        Finger thumb = null;
+        for (int i = 0; i < mFingers.size(); i++) {
+            if (mFingers.valueAt(i).role == ROLE_STICK) thumb = mFingers.valueAt(i);
+        }
+        int dirs = thumb != null ? stickDirection(thumb) : 0;
+        mFill.setColor(0x40000000);
+        mFill.setAlpha(Math.round(0x40 * mOpacity));
+        c.drawCircle(cx, cy, r, mFill);
+        mRing.setAlpha(Math.round(0x70 * mOpacity));
+        c.drawCircle(cx, cy, r, mRing);
+        // Direction marks: small triangles near the rim.
+        android.graphics.Path tri = new android.graphics.Path();
+        int[] bits = {Native.UP, Native.RIGHT, Native.DOWN, Native.LEFT};
+        for (int k = 0; k < 4; k++) {
+            double a = Math.toRadians(-90 + k * 90);
+            float tx = cx + (float) Math.cos(a) * r * 0.78f, ty = cy + (float) Math.sin(a) * r * 0.78f;
+            float sz = r * 0.13f;
+            double pa = a + Math.PI / 2;
+            tri.reset();
+            tri.moveTo(tx + (float) Math.cos(a) * sz, ty + (float) Math.sin(a) * sz);
+            tri.lineTo(tx + (float) Math.cos(pa) * sz, ty + (float) Math.sin(pa) * sz);
+            tri.lineTo(tx - (float) Math.cos(pa) * sz, ty - (float) Math.sin(pa) * sz);
+            tri.close();
+            boolean on = (dirs & bits[k]) != 0;
+            mFill.setColor(on ? 0xffffd21f : 0x90ffffff);
+            mFill.setAlpha(Math.round((on ? 0xff : 0x90) * mOpacity));
+            c.drawPath(tri, mFill);
+        }
+        // The knob.
+        float kx = cx, ky = cy;
+        if (thumb != null) {
+            float dx = thumb.x - cx, dy = thumb.y - cy, d = (float) Math.hypot(dx, dy), max = r * 0.6f;
+            if (d > max) {
+                dx = dx * max / d;
+                dy = dy * max / d;
+            }
+            kx += dx;
+            ky += dy;
+        }
+        mFill.setColor(thumb != null ? 0xe0ffffff : 0xa0ffffff);
+        mFill.setAlpha(Math.round((thumb != null ? 0xe0 : 0xa0) * mOpacity));
+        c.drawCircle(kx, ky, r * 0.42f, mFill);
+        mRing.setAlpha(0x60);
     }
 
     private boolean hasStick() {

@@ -70,6 +70,9 @@ final class OptionsScreen {
     /** Drift button: R separate from A, larger, placed for the thumb (true), or R right above A (false). */
     static boolean bigDrift(android.content.Context c) { return prefs(c).getBoolean("big_drift", false); }
 
+    /** The stick: a fixed base (true) or one that appears where the thumb lands (false). */
+    static boolean fixedStick(android.content.Context c) { return prefs(c).getBoolean("stick_fixed", true); }
+
     static int buttonSizePercent(android.content.Context c) { return prefs(c).getInt("button_size", 100); }
 
     static int buttonOpacityPercent(android.content.Context c) { return prefs(c).getInt("button_opacity", 100); }
@@ -257,6 +260,8 @@ final class OptionsScreen {
                 v -> put("touch_always", v));
         toggle(g, "Auto-accelerate", "A is held in races; B still brakes", autoAccelerate(mActivity),
                 v -> put("auto_accel", v));
+        segmented(g, "Stick", new String[] {"Fixed", "Floating"}, fixedStick(mActivity) ? 0 : 1,
+                i -> put("stick_fixed", i == 0));
         segmented(g, "Drift button (R)", new String[] {"Above A", "Large, apart"}, bigDrift(mActivity) ? 1 : 0,
                 i -> put("big_drift", i == 1));
         LinearLayout look = group("Buttons");
