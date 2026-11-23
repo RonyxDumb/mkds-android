@@ -332,6 +332,23 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             }
 
             @Override
+            public void shareLog() {
+                // The end of log.txt (the game's messages: Nintendo WFC's are "wfc:"), shared as text.
+                try {
+                    byte[] all = java.nio.file.Files.readAllBytes(new File(getFilesDir(), "log.txt").toPath());
+                    int from = Math.max(0, all.length - 200000);
+                    String text = "Mario Kart DS " + BuildConfig.VERSION_NAME + " (Android "
+                            + android.os.Build.VERSION.RELEASE + ", " + android.os.Build.MODEL + ")\n"
+                            + new String(all, from, all.length - from, "UTF-8");
+                    Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain")
+                            .putExtra(Intent.EXTRA_SUBJECT, "Mario Kart DS log").putExtra(Intent.EXTRA_TEXT, text);
+                    startActivity(Intent.createChooser(send, "Share the log"));
+                } catch (Exception e) {
+                    toast("No log yet");
+                }
+            }
+
+            @Override
             public void editLayout() {
                 // The editor is drawn by the controls over the paused game; the options come back after it.
                 if (mOptions != null) mOptions.close();

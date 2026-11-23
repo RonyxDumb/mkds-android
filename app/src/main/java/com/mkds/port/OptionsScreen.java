@@ -46,6 +46,7 @@ final class OptionsScreen {
         void addMod();
         void onModChosen();
         void editLayout();
+        void shareLog();
     }
 
     static final String PREFS = "mkds";
@@ -294,6 +295,8 @@ final class OptionsScreen {
         LinearLayout s = group("Save file");
         action(s, "Export save file", "Keep a copy anywhere", mHost::exportSave);
         action(s, "Import save file", "From an export, a DS or an emulator", mHost::importSave);
+        LinearLayout help = group("Help");
+        action(help, "Share the log", "The game's messages, for reporting a problem", mHost::shareLog);
         footnote("Progress is saved every few seconds and when you leave the app. Uninstalling deletes it: export a "
                 + "copy first.");
     }

@@ -550,6 +550,11 @@ static void wfc_scan_result(void) {
 // Frames from the router to the DS, through the receive buffer of WM_StartDCF; each one handled at once.
 static void wfc_deliver_frames(void) {
     if (!s_wfc_dcf_buf) return;
+    // After the answers to the DS's own frame sends (the queue goes first): its stack takes a frame for a connection
+    // only once the send that started it is done.
+    for (int i = 0; i < s_queue_count; i++) {
+        if (U16(s_queue[(s_queue_head + i) % MSG_SLOTS], 0) == WIRELESS_REQUEST_QUEUE_FRAME_DATA) return;
+    }
     u8 *rb = PTR(s_wfc_dcf_buf);
     for (int i = 0; i < 16; i++) {
         u8 src[6], dst[6];
@@ -1411,7 +1416,6 @@ bool port_wm7_poll(void) {
             s_wfc_poll_ns = now;
             port_wfc_poll();
         }
-        wfc_deliver_frames();
     }
     if (!s_net) {
         for (int guard = 0; s_queue_count && guard < MSG_SLOTS; guard++) {
@@ -1421,6 +1425,7 @@ bool port_wm7_poll(void) {
             deliver(m);
             ran = true;
         }
+        if (s_wfc_linked) wfc_deliver_frames();
         return ran;
     }
     static u64 s_prev;
@@ -1476,5 +1481,6 @@ bool port_wm7_poll(void) {
         deliver(m);
         ran = true;
     }
+    if (s_wfc_linked) wfc_deliver_frames();
     return ran;
 }

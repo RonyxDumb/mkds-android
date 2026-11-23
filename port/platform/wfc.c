@@ -439,6 +439,8 @@ static void tcp_reset(u32 ip, u16 port, u16 ds_port, u32 seq, u32 ack) {
 }
 
 static void tcp_free(Tcp *t) {
+    if (WFC_LOG && !t->local) port_log("wfc: TCP to %d.%d.%d.%d:%d closed", t->ip >> 24, (t->ip >> 16) & 255,
+                                      (t->ip >> 8) & 255, t->ip & 255, t->port);
     if (t->sock >= 0 && !t->local) hapi_inet_close(t->sock);
     t->state = T_FREE;
 }

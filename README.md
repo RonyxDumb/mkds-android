@@ -146,7 +146,8 @@ connect to, and the game's Nintendo WFC settings get a connection to it the firs
   Wiimmfi and gets its friend code.
 - Names of Nintendo's servers are asked of Wiimmfi's DNS server (167.235.229.36), as on a DS set up for Wiimmfi; when it
   cannot be reached, the phone's own DNS looks them up under wiimmfi.de.
-- The game's network messages are in `log.txt` (lines starting with `wfc:`), for reporting problems.
+- The game's network messages (lines starting with `wfc:`) can be sent with **⚙ → Game → Share the log**, for
+  reporting problems.
 
 ## Meta Quest (VR)
 A second app, built from the same sources, shows the game on a large screen in VR through OpenXR (Quest 2, Pro, 3

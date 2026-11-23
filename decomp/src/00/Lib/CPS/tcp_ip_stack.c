@@ -1693,7 +1693,13 @@ u32 CPSi_TcpConnectRaw(CPSSoc *socket) {
         socket->mStateStartTime = OS_GetTick() >> 16;
         tcp_send_handshake(socket, TCP_FLAG_SYN, 24);
         interruptState = OS_DisableInterrupts();
+#ifdef PLATFORM_PORT
+        // The answer can come while the SYN is still being sent (a fast network: platform/wfc.c): then the
+        // connection is already established and nothing would wake this thread.
+        if (CPSMyIp != 0 && socket->mState == SOCKET_STATE_SYN_SENT) {
+#else
         if (CPSMyIp != 0) {
+#endif
             socket->mBlockType = SOCKET_BLOCK_CONNECT;
             OS_SleepThread(NULL);
         }

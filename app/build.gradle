@@ -11,8 +11,8 @@ android {
         applicationId 'com.mkds.port'
         minSdk 26
         targetSdk 35
-        versionCode 36
-        versionName '0.36'
+        versionCode 37
+        versionName '0.37'
         externalNativeBuild {
             cmake {
                 arguments '-DANDROID_STL=none'
@@ -47,6 +47,7 @@ android {
 
     buildFeatures {
         prefab true
+        buildConfig true // the version in the shared log
     }
 
     // One key for every build (CI and local): Android installs an update only over an app signed with the same key,
