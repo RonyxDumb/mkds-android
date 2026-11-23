@@ -129,6 +129,7 @@ typedef struct Link {
     u32 recv_next;
     bool mp_ready;  // a child that started MP
     int64_t srtt_ns; // smoothed round trip time, -1 = none yet
+    bool slow;       // the link has been slow once: it stays so (Wi-Fi goes up and down around the limit)
     // A parent's data sharing with this child (see "data sharing over slow links").
     struct DsRecord *ds_fifo; // DS_FIFO records the library has no place for yet
     int ds_head, ds_count;
@@ -405,6 +406,7 @@ static Link *link_open(u16 aid, const HostNetAddr *addr, const u8 *mac) {
     memcpy(l->mac, mac, 6);
     l->heard_ns = l->sent_ns = now_ns();
     l->srtt_ns = -1;
+    l->slow = false;
     return l;
 }
 
@@ -1026,7 +1028,7 @@ static void deliver_port_data(u16 port, u16 aid, const u8 *mac, u16 mp_seq, cons
 // Only where the game is known to skip a frame for a missing record: its own data sharing, on port 12. A skipped
 // frame's records are not played, and one byte of the game's record is a message that is sent once (the menus'
 // commands): a set that holds one is never sent short, and a record that holds one is never taken out.
-#define DS_SLOW_NS 8000000          // round trip time from which a link is slow
+#define DS_SLOW_NS 4000000          // round trip time from which a link is slow (any Wi-Fi between phones)
 #define DS_GAME_PORT 12
 #define DS_GAME_RECORD 8            // bytes in the game's record
 #define DS_GAME_MESSAGE 5           // offset of the byte that is sent once (SharingSendRecord.mSendByte)
@@ -1036,7 +1038,17 @@ static void deliver_port_data(u16 port, u16 aid, const u8 *mac, u16 mp_seq, cons
 #define DS_SURPLUS_FRAMES_DEEP 8    // the same with four or more waiting (delay piled up by a burst of late packets)
 #define DS_SPARE_RECORDS 2          // waiting records kept: a record a little late is then not a skipped frame
 
-static bool link_slow(const Link *l) { return l->srtt_ns >= DS_SLOW_NS; }
+// A slow link once, a slow link until it ends: switching between waiting for every record (as on the DS) and sending
+// sets ahead made the game stop for a moment each time, and phones on Wi-Fi go above and below any limit.
+static bool link_slow(const Link *l) {
+    if (l->srtt_ns >= DS_SLOW_NS) ((Link *) l)->slow = true;
+    return l->slow;
+}
+
+// The log: what the data sharing did over the last seconds (local and online play).
+static struct {
+    int frames, short_sets, wait_silent, wait_room, wait_local, trims, faster, slower;
+} s_ds_stats;
 
 // The data sharing a parent runs on the port, or NULL.
 static WMDataSharingInfo *ds_parent(u16 port) {
@@ -1111,6 +1123,7 @@ static void ds_trim(Link *l) {
             }
             l->ds_count--;
             l->ds_surplus = 0;
+            s_ds_stats.trims++;
             return;
         }
         before = r->data;
@@ -1133,15 +1146,24 @@ static void ds_parent_deadline(u64 now) {
     for (int a = 1; a < MAX_LINKS; a++) {
         if (!(waiting & (1 << a))) continue;
         const Link *l = &s_links[a];
-        if (!l->used || !link_slow(l)) return; // a local child: wait for it, as on the DS
+        if (!l->used || !link_slow(l)) { // a local child: wait for it, as on the DS
+            s_ds_stats.wait_local++;
+            return;
+        }
         // A child that has gone silent is waited for: it would not read the sets sent meanwhile.
         u64 window = (u64) l->srtt_ns * 2 + 200000000ull;
         if (window > 700000000ull) window = 700000000ull;
-        if (since(now, l->ds_heard_ns) > window) return;
+        if (since(now, l->ds_heard_ns) > window) {
+            s_ds_stats.wait_silent++;
+            return;
+        }
         // Nor is a child that reads the sets slower than they are sent (a slower device): no more sets on their way
         // than the link's delay accounts for, with some room. The game then runs at that child's speed, as on the DS.
         int64_t room = 4 + l->srtt_ns * 3 / 2 / port_os_vblank_period_ns();
-        if (l->ds_out >= (room > DS_OUT_MAX ? DS_OUT_MAX : room)) return;
+        if (l->ds_out >= (room > DS_OUT_MAX ? DS_OUT_MAX : room)) {
+            s_ds_stats.wait_room++;
+            return;
+        }
     }
     if (ds->mMemberDataSize != DS_GAME_RECORD) return;
     u16 arrived = ds->mDs[w].mArrivedMembers;
@@ -1152,6 +1174,7 @@ static void ds_parent_deadline(u64 now) {
     // The set goes without the missing records: not waited for any more, and not marked as arrived.
     ds->mDs[w].mAidBitmap = 0;
     WmDataSharingSendDataSet(ds, 0);
+    s_ds_stats.short_sets++;
 }
 
 // Child, once a frame: keeps the sets waiting to be read near one.
@@ -1165,8 +1188,13 @@ static void ds_child_pace(void) {
         const WMDataSharingInfo *ds = w->mPortCallbackArgs[port];
         if (!ds) continue;
         int unread = ((ds->mWriteIndex - ds->mReadIndex) & 3) + s_held_count;
-        if (unread >= 3) port_os_shift_vblank(-250000); // 1.5 % faster
-        else if (unread == 0) port_os_shift_vblank(80000);
+        if (unread >= 3) {
+            port_os_shift_vblank(-250000); // 1.5 % faster
+            s_ds_stats.faster++;
+        } else if (unread == 0) {
+            port_os_shift_vblank(80000);
+            s_ds_stats.slower++;
+        }
         return;
     }
 }
@@ -1183,6 +1211,15 @@ static void ds_frame(u64 now) {
     if (s_due_ns <= now) s_due_ns = now + (u64) period; // no VBlanks (paused)
     if (s_parent) ds_parent_deadline(now);
     else if (s_child) ds_child_pace();
+    if ((s_parent || s_child) && s_status && s_status->mMpFlag && ++s_ds_stats.frames >= 600) {
+        const Link *l = s_parent ? &s_links[1] : &s_links[0];
+        port_log("wm7: 10 s: round trip %d ms%s; sets sent short %d, waited for a silent child %d, for a slow child "
+                 "%d, for a local child %d; delay trimmed %d; child faster %d, slower %d; records waiting %d",
+                 l->used ? (int) (l->srtt_ns / 1000000) : -1, l->used && l->slow ? " (slow link)" : "",
+                 s_ds_stats.short_sets, s_ds_stats.wait_silent, s_ds_stats.wait_room, s_ds_stats.wait_local,
+                 s_ds_stats.trims, s_ds_stats.faster, s_ds_stats.slower, l->used ? l->ds_count : 0);
+        memset(&s_ds_stats, 0, sizeof(s_ds_stats));
+    }
 }
 
 // Port data that came early waits for its port callback (the receiver sets it once its MP has started).
