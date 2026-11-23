@@ -206,6 +206,39 @@ static void wiimmfi_name(const char *name, char *out, u32 size) {
     }
 }
 
+// The question's name of a DNS message, and the first address of its answer (0: none).
+static void dns_describe(const u8 *m, u32 len, char *name, u32 size, u32 *addr) {
+    u32 i = 12, n = 0;
+    name[0] = 0;
+    *addr = 0;
+    while (i < len && m[i] && !(m[i] & 0xc0)) {
+        u32 l = m[i++];
+        if (i + l > len || n + l + 1 >= size) return;
+        if (n) name[n++] = '.';
+        memcpy(name + n, m + i, l);
+        n += l;
+        i += l;
+    }
+    name[n] = 0;
+    i += 5; // end, type, class
+    u32 answers = len >= 12 ? rd16be(m + 6) : 0;
+    for (u32 a = 0; a < answers && i < len; a++) {
+        if (m[i] & 0xc0) i += 2;
+        else {
+            while (i < len && m[i]) i += 1 + m[i];
+            i++;
+        }
+        if (i + 10 > len) return;
+        u16 type = rd16be(m + i), rdlen = rd16be(m + i + 8);
+        i += 10;
+        if (type == 1 && rdlen == 4 && i + 4 <= len) {
+            *addr = rd32be(m + i);
+            return;
+        }
+        i += rdlen;
+    }
+}
+
 // Wiimmfi's DNS server: what a real DS is set to for Wiimmfi; it answers Nintendo's names with Wiimmfi's servers.
 #define WIIMMFI_DNS 0xa7ebe524u // 167.235.229.36
 #define DNS_PENDING 8
@@ -256,7 +289,13 @@ static void poll_dns(void) {
                 // conntest is the router's own (answer_dns); everything else as Wiimmfi says.
                 if (strstr((const char *) d->q + 12, "conntest")) answer_dns(d->ds_port, d->q, d->len, true);
                 else send_udp(ROUTER_IP, 53, DS_IP, d->ds_port, buf, (u32) n);
-                if (WFC_LOG) port_log("wfc: DNS answered by Wiimmfi");
+                if (WFC_LOG) {
+                    char name[256];
+                    u32 a;
+                    dns_describe(buf, (u32) n, name, sizeof(name), &a);
+                    port_log("wfc: DNS %s = %d.%d.%d.%d (Wiimmfi's DNS)", name, a >> 24, (a >> 16) & 255,
+                             (a >> 8) & 255, a & 255);
+                }
                 break;
             }
         }
@@ -329,6 +368,7 @@ typedef struct UdpPort {
     u16 port; // the DS's
     int32_t sock;
     u64 used_ms;
+    int logged, replies_logged;
 } UdpPort;
 static UdpPort s_udp[UDP_PORTS];
 
@@ -360,10 +400,16 @@ static void on_udp(const u8 *ip, const u8 *udp, u32 len) {
         u->sock = hapi_inet_open(0);
         u->used = u->sock >= 0;
         u->port = sport;
+        u->logged = u->replies_logged = 0;
         if (!u->used) return;
     }
     u->used_ms = now_ms();
-    hapi_inet_send(u->sock, data, n, to_net(dst), dport);
+    if (WFC_LOG && u->logged < 4) {
+        u->logged++;
+        port_log("wfc: UDP %d -> %d.%d.%d.%d:%d, %d bytes", sport, dst >> 24, (dst >> 16) & 255, (dst >> 8) & 255,
+                 dst & 255, dport, (int) n);
+    }
+    if (hapi_inet_send(u->sock, data, n, to_net(dst), dport) < 0 && WFC_LOG) port_log("wfc: UDP send failed");
 }
 
 static void poll_udp(void) {
@@ -377,7 +423,13 @@ static void poll_udp(void) {
             int32_t n = hapi_inet_recv(u->sock, buf, sizeof(buf), &from);
             if (n <= 0) break;
             u->used_ms = now_ms();
-            send_udp(from_net(from.ip), (u16) from.port, DS_IP, u->port, buf, (u32) n);
+            u32 fi = from_net(from.ip);
+            if (WFC_LOG && u->replies_logged < 4) {
+                u->replies_logged++;
+                port_log("wfc: UDP %d <- %d.%d.%d.%d:%d, %d bytes", u->port, fi >> 24, (fi >> 16) & 255,
+                         (fi >> 8) & 255, fi & 255, (int) from.port, (int) n);
+            }
+            send_udp(fi, (u16) from.port, DS_IP, u->port, buf, (u32) n);
         }
     }
 }
@@ -406,6 +458,7 @@ typedef struct Tcp {
     u32 out_len;
     u8 in[TCP_IN];
     u32 in_len;
+    u32 bytes_up, bytes_down; // the log
 } Tcp;
 static Tcp *s_tcp;
 
@@ -439,8 +492,11 @@ static void tcp_reset(u32 ip, u16 port, u16 ds_port, u32 seq, u32 ack) {
 }
 
 static void tcp_free(Tcp *t) {
-    if (WFC_LOG && !t->local) port_log("wfc: TCP to %d.%d.%d.%d:%d closed", t->ip >> 24, (t->ip >> 16) & 255,
-                                      (t->ip >> 8) & 255, t->ip & 255, t->port);
+    if (WFC_LOG && !t->local) {
+        port_log("wfc: TCP to %d.%d.%d.%d:%d closed (sent %u, received %u bytes; %s%s)", t->ip >> 24,
+                 (t->ip >> 16) & 255, (t->ip >> 8) & 255, t->ip & 255, t->port, t->bytes_up, t->bytes_down,
+                 t->remote_eof ? "server closed" : "server open", t->ds_fin ? ", DS closed" : "");
+    }
     if (t->sock >= 0 && !t->local) hapi_inet_close(t->sock);
     t->state = T_FREE;
 }
@@ -477,7 +533,10 @@ static void on_tcp(const u8 *ip, const u8 *th, u32 len) {
         if (c->state != T_FREE && c->ds_port == sport && c->ip == dst && c->port == dport) t = c;
     }
     if (flags & 0x04) { // RST
-        if (t) tcp_free(t);
+        if (t) {
+            if (WFC_LOG) port_log("wfc: the DS reset a connection");
+            tcp_free(t);
+        }
         return;
     }
     if (flags & 0x02) { // SYN
@@ -494,6 +553,7 @@ static void on_tcp(const u8 *ip, const u8 *th, u32 len) {
         }
         memset(t, 0, offsetof(Tcp, out));
         t->out_len = t->in_len = 0;
+        t->bytes_up = t->bytes_down = 0;
         t->ds_port = sport, t->ip = dst, t->port = dport;
         t->rcv_nxt = seq + 1;
         t->iss = (u32) rand() * 2654435761u;
@@ -592,6 +652,7 @@ static void poll_tcp(void) {
         if (t->in_len && !t->local) {
             int32_t k = hapi_inet_send(t->sock, t->in, t->in_len, 0, 0);
             if (k > 0) {
+                t->bytes_up += (u32) k;
                 memmove(t->in, t->in + k, t->in_len - (u32) k);
                 t->in_len -= (u32) k;
                 tcp_segment(t, 0x10, t->snd_nxt, NULL, 0); // the window opened again
@@ -602,7 +663,10 @@ static void poll_tcp(void) {
         // From the internet.
         while (!t->local && !t->remote_eof && t->out_len < TCP_OUT) {
             int32_t k = hapi_inet_recv(t->sock, t->out + t->out_len, TCP_OUT - t->out_len, NULL);
-            if (k > 0) t->out_len += (u32) k;
+            if (k > 0) {
+                t->out_len += (u32) k;
+                t->bytes_down += (u32) k;
+            }
             else {
                 if (k < 0) t->remote_eof = true;
                 break;
