@@ -27,7 +27,10 @@ DS hardware replaced by a native platform layer (OpenGL ES 3 graphics, native so
 ## Installation
 1. Download the APK from the [Releases](../../releases) page and install it.
 2. On first launch, select your ROM file. It is copied into the app's private storage; the original is not modified.
-3. Play. Saves are kept in the app's storage and survive updates.
+3. Play. Saves are kept in the app's storage and survive updates (from 0.29 every build is signed with the same key:
+   an update installs over the app; earlier builds had a different key each, and an uninstall deletes the save).
+   **⚙ → Export save file** keeps a copy anywhere you like; **Import save file** loads one (also a save of the European
+   game from a DS or an emulator).
 
 ## Controls
 | Touch | Action |
@@ -41,12 +44,27 @@ DS hardware replaced by a native platform layer (OpenGL ES 3 graphics, native so
 | ⇄ | Swap the screens: the touch screen becomes large, for menus |
 | **MIC** (with voice chat) | Microphone on / off |
 | **NET** (outside races) | Network settings: local or online play |
+| **⚙** | Options (also the gamepad's home button) |
 | Touch screen (inset) | Stylus input |
 
 The Android back gesture pauses the game during a race and does nothing elsewhere.
 
 With a gamepad connected, the on-screen controls are hidden (the screen swap button stays). If the gamepad
 disconnects during a race, the game pauses and the touch controls come back. L2/R2 also work as L/R.
+
+## Options
+**⚙** opens the options over the paused game, in three columns:
+- **Graphics**: frame rate (60 fps, or the display's maximum with interpolated frames), 3D resolution (auto or 1× to
+  4×), widescreen on or off, one or two screens.
+- **Controls**: on-screen controls hidden with a gamepad or always shown, auto-accelerate (A held in races, B still
+  brakes: one thumb steers, the other drifts with R), the drift button above A or large and apart, button size and
+  opacity, vibration.
+- **Game**: unlock everything (every Grand Prix gets a gold trophy with three stars in the save file, which unlocks
+  every cup, class, character and kart; applied when the game starts, it restarts for it), export and import of the
+  save file, and a home screen shortcut with the game's own icon (read from your ROM).
+
+The app's icon is an adaptive icon with a monochrome layer: with themed icons on (Android 13+), it takes the colours of
+the wallpaper (Material You).
 
 ## Local multiplayer
 1. Connect both phones to the same Wi-Fi network (a hotspot from one of them works too).

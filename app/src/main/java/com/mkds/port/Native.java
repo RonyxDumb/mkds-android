@@ -27,6 +27,9 @@ final class Native {
 
     static native void setPaused(boolean paused);
 
+    /** The options screen: the largest 3D scale (0 = as the display needs) and frame interpolation above 60 Hz. */
+    static native void setGraphics(int maxScale, boolean interpolate);
+
     /** Widescreen: the aspect ratio of the race view (the whole display). */
     static native void setWideAspect(float aspect);
 

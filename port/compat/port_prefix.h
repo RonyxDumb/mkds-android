@@ -7,6 +7,9 @@ extern int g_port_aspect; // race camera aspect ratio (platform/frame.c)
 extern unsigned int g_port_draw_id;
 #define PORT_DRAW_ID(object) ((unsigned int) (unsigned long) (object))
 extern void *port_player_name(void *saved); // the player's name for races and other players (platform/os.c)
+// The app's options for the game, set before the start (platform/os.c).
+#define PORT_OPTION_UNLOCK_ALL 1 // every cup, class, character and kart: Grand Prix records with gold and three stars
+extern int port_option(int option);
 
 
 /* mwcc intrinsics */

@@ -191,8 +191,15 @@ static void draw_text_bg(const Engine *e, int bg, int y, uint16_t *out) {
     int x0, x1;
     bg_span(e, bg, &x0, &x1);
     out += e->margin;
-    for (int x = x0; x < x1; x++) {
-        if ((x < 0 || x > 255) && e->side[0]) {
+    // Race HUD in widescreen: a band that crosses the whole DS screen on this line (the goal screen's checkered
+    // strip) continues to the sides, its map repeating as it scrolls.
+    int ranges[3][2] = {{x0, x1}, {-e->margin, 0}, {256, 256 + e->margin}};
+    for (int range = 0; range < 3; range++) {
+    if (range == 1 && !(e->hud_shift && bg != e->ext_bg && e->margin > 0 && (out[0] & 0x8000) && (out[255] & 0x8000))) {
+        break;
+    }
+    for (int x = ranges[range][0]; x < ranges[range][1]; x++) {
+        if ((x < 0 || x > 255) && e->side[0] && range == 0) {
             out[x] = fade555(e->side[x > 255][y], x < 0 ? -x : x - 255, e->margin);
             continue;
         }
@@ -217,6 +224,7 @@ static void draw_text_bg(const Engine *e, int bg, int y, uint16_t *out) {
             color = e->pal[(entry >> 12) * 16 + idx];
         }
         out[x] = (color & 0x7fff) | 0x8000;
+    }
     }
 }
 
@@ -356,6 +364,16 @@ static void plan_hud_shift(Engine *e) {
     for (int i = 0; i < 128; i++) {
         if (!on[i]) continue;
         int g = group[i], w = gx1[g] - gx0[g], cx = (gx0[g] + gx1[g]) / 2;
+        // A group that reaches a side of the DS screen (and not the other half) belongs to that side, however wide:
+        // the goal screen's "TIME" and "LAP 1" rows (label and digits) go with the lap rows under them.
+        if (gx1[g] >= 232 && gx0[g] >= 64) {
+            e->obj_shift[i] = 1;
+            continue;
+        }
+        if (gx0[g] <= 24 && gx1[g] <= 192) {
+            e->obj_shift[i] = -1;
+            continue;
+        }
         if (w > 128) continue; // spans the screen
         if (cx < 72) e->obj_shift[i] = -1;
         else if (cx > 184) e->obj_shift[i] = 1;

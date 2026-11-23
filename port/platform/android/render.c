@@ -20,6 +20,14 @@ static bool s_window_changed;
 static int s_layout[8] = {0, 0, 256, 192, 256, 0, 256, 192};
 static pthread_t s_thread;
 static bool s_thread_running;
+// The options screen: the largest 3D scale (1 = the DS resolution, 0 = as large as the display needs) and whether
+// frames are interpolated above 60 Hz.
+static volatile int s_max_scale, s_interpolate = 1;
+
+void android_render_set_options(int max_scale, bool interpolate) {
+    s_max_scale = max_scale;
+    s_interpolate = interpolate;
+}
 
 static void *render_thread(void *arg) {
     (void) arg;
@@ -81,6 +89,7 @@ static void *render_thread(void *arg) {
             int scale = (rect_h + 191) / 192;
             if (scale < 1) scale = 1;
             if (scale > 6) scale = 6;
+            if (s_max_scale > 0 && scale > s_max_scale) scale = s_max_scale;
             present_update(f, scale);
             snap_time = f->time_ns;
         }
@@ -90,7 +99,7 @@ static void *render_thread(void *arg) {
         clock_gettime(CLOCK_MONOTONIC, &ts);
         uint64_t now = (uint64_t) ts.tv_sec * 1000000000ull + (uint64_t) ts.tv_nsec;
         float t = 1.0f;
-        if (swap_interval < 1.0 / 75 && snap_time) {
+        if (s_interpolate && swap_interval < 1.0 / 75 && snap_time) {
             double since = (double) (int64_t) (now - snap_time) / 1e9;
             t = (float) (since / game_period);
             if (t < 0) t = 0;

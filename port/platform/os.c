@@ -688,8 +688,11 @@ void WaitByLoop(s32 loopCount) {
 void VBlankIntrWait(void) { OS_WaitIrq(1, 1); }
 
 // The console's language (owner information): 1 English, 2 French, 3 German, 4 Italian, 5 Spanish. The host sets
-// it from the phone's language before the game starts.
+// it from the phone's language before the game starts. Bits 8 and up carry the app's options for the game
+// (PORT_OPTION_*), set the same way before the start.
 int g_port_language = 1;
+
+int port_option(int option) { return (g_port_language >> 8) & option; }
 
 // The player's name for multiplayer and races, when the app's network settings give one (10 characters, UTF-16, as
 // the save file's nickname; the host writes it, at any time). The game takes its name through port_player_name
@@ -707,7 +710,7 @@ void *port_player_name(void *saved) {
 void OS_GetOwnerInfo(OwnerInfo *info) {
     static const char name[] = "Player";
     memset(info, 0, sizeof(*info));
-    info->mLanguage = (u32) g_port_language;
+    info->mLanguage = (u32) (g_port_language & 7);
     info->mFavoriteColor = 0;
     info->mBirthdayMonth = 1;
     info->mBirthdayDay = 1;

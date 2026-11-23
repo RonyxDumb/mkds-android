@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Blue with a checkered band, the colours of the game's menus. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#1F5FD0" android:pathData="M0,0h108v108h-108z" />
+    <path android:fillColor="#2E74E8" android:pathData="M0,0h108v54h-108z" />
+    <path android:fillColor="#3A86F5"
+        android:pathData="M0,74h9v9h-9zM18,74h9v9h-9zM36,74h9v9h-9zM54,74h9v9h-9zM72,74h9v9h-9zM90,74h9v9h-9zM9,83h9v9h-9zM27,83h9v9h-9zM45,83h9v9h-9zM63,83h9v9h-9zM81,83h9v9h-9zM99,83h9v9h-9z" />
+</vector>

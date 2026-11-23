@@ -123,6 +123,14 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setPaused(JNIEnv *env, jclass c
     }
 }
 
+// The options screen: the largest 3D scale (0 = as the display needs) and frame interpolation above 60 Hz.
+JNIEXPORT void JNICALL Java_com_mkds_port_Native_setGraphics(JNIEnv *env, jclass cls, jint max_scale,
+                                                             jboolean interpolate) {
+    (void) env, (void) cls;
+    extern void android_render_set_options(int max_scale, bool interpolate);
+    android_render_set_options(max_scale, interpolate);
+}
+
 // Widescreen: the race view's aspect ratio (the whole display); applies from the next race.
 JNIEXPORT void JNICALL Java_com_mkds_port_Native_setWideAspect(JNIEnv *env, jclass cls, jfloat aspect) {
     (void) env, (void) cls;
