@@ -727,7 +727,9 @@ static void master_brightness(uint16_t reg, uint32_t *line, int width) {
     if (factor > 16) factor = 16;
     if (!factor || mode == 0 || mode == 3) return;
     for (int x = 0; x < width; x++) {
-        line[x] = mode == 1 ? brighten(line[x], factor) : darken(line[x], factor);
+        uint32_t a = line[x] & 0xff000000u;
+        if (!a) continue; // nothing drawn here (the race map's parts): stays transparent
+        line[x] = ((mode == 1 ? brighten(line[x], factor) : darken(line[x], factor)) & 0xffffff) | a;
     }
 }
 

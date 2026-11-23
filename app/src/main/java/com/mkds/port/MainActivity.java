@@ -290,6 +290,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             @Override
             public void onOptionsClosed() {
                 mOptions = null;
+                if (mControls != null) mControls.setVisibility(View.VISIBLE);
                 if (sStarted && mResumed) Native.setPaused(false);
                 hideSystemBars();
             }
@@ -334,7 +335,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                         .show();
             }
         });
-        mRoot.addView(mOptions.view());
+        if (mControls != null) mControls.setVisibility(View.INVISIBLE);
+        mRoot.addView(mOptions.view(), new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+        mOptions.view().bringToFront();
     }
 
     private void applyGraphics() {

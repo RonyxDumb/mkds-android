@@ -208,27 +208,25 @@ static void copy_list(Gx3dFrame *d, const Gx3dFrame *g) {
 }
 
 // ------------------------------------------------------------------------------------------------ one screen
-// The app shows a single widescreen picture made of both DS screens (the layout's two rectangles are the same):
-//  - races (and the 3D intros): the top screen fills it; from the touch screen, its map shows as a round map in a
-//    corner (only around the player) and its sprites (time, ranking) over it, as part of the race display;
-//  - elsewhere (menus): one background, the top screen's backmost layer continued across the width, and on it,
-//    without their own backgrounds, what the top screen shows (titles, previews, 3D models) on the left and what the
-//    touch screen shows (the choices) on the right, each as large as fits. Touches go to the right part.
-enum { ONE_BACK, ONE_TOP, ONE_TOP_BELOW, ONE_BOTTOM, ONE_BOTTOM_BELOW, ONE_MAP, ONE_HUD, ONE_TEXTURES };
+// The app fills the display with the game (the layout's two rectangles are the same):
+//  - races (and the 3D intros, the pause): the top screen fills it; from the touch screen, its map shows as a round
+//    map in a corner (only around the player) and its sprites (time, ranking) over it, as part of the race display;
+//    after the goal, the results and their menu as a panel to touch;
+//  - elsewhere (menus): the two screens side by side as they are, each filling its half of the display; touches go
+//    to the right half.
+enum { ONE_MAP, ONE_HUD, ONE_TEXTURES };
 static GLuint s_one_tex[ONE_TEXTURES];
 static bool s_one;           // the last layout asked for one screen
+static bool s_stretch;       // present_draw_screens fills the rectangles (no fitting)
 static int s_one_kind;       // 0 race, 1 menus
-static int s_one_back_w, s_one_back_m;
-static float s_one_band[2][3]; // the background's colour above and below the parts // the background's width and margin (its DS columns start at the left edge)
-static bool s_one_top_3d, s_one_bottom_3d;
 static bool s_one_hud;     // races: the touch screen is shown
-static bool s_one_hud_map; // as the map (else as a panel to touch: the results after the goal) // the part is engine A with its 3D layer (compose shader)
+static bool s_one_hud_map; // as the map (else as a panel to touch: the results after the goal)
 static float s_one_touch[4]; // the touch screen's part, surface pixels (x, y, w, h)
 
 void present_one_touch_rect(float *out) { memcpy(out, s_one_touch, sizeof(s_one_touch)); }
 
 static void one_update(const FrameSnapshot *f, bool race, int canvas_w) {
-    static uint32_t buf[GPU2D_MAX_W * 192], below[GPU2D_MAX_W * 192];
+    static uint32_t buf[GPU2D_MAX_W * 192];
     bool a_top = gpu2d_engine_a_on_top(f);
     s_one_kind = race ? 0 : 1;
     if (race) {
@@ -266,41 +264,7 @@ static void one_update(const FrameSnapshot *f, bool race, int canvas_w) {
         upload(s_one_tex[ONE_HUD], buf, 256);
         return;
     }
-    // Background: the top screen's backmost layer and backdrop, its DS columns at the left edge.
-    // Drawn at the parts' scale (draw_one_menu), it must reach the right edge: canvas / scale columns from its left.
-    float part_scale = (canvas_w - 6) / 512.0f;
-    if (part_scale > 1) part_scale = 1;
-    int m = (int) (canvas_w / part_scale) - 256 + 4;
-    if (m < 0) m = 0;
-    if (256 + 2 * m > GPU2D_MAX_W) m = (GPU2D_MAX_W - 256) / 2;
-    int back = gpu2d_back_layer_2d(f, a_top);
-    unsigned back_keep = GPU2D_KEEP_BD | (back >= 0 ? GPU2D_KEEP_BG(back) : 0);
-    gpu2d_render_part(f, a_top, back_keep, buf, NULL, m);
-    upload(s_one_tex[ONE_BACK], buf, 256 + 2 * m);
-    // Above and below it (the parts are smaller than the display's height): its first and last lines' mean colour.
-    for (int e = 0; e < 2; e++) {
-        const uint32_t *line = buf + (e ? 191 : 0) * (256 + 2 * m) + m;
-        uint32_t sum[3] = {0, 0, 0};
-        for (int x = 0; x < 256; x++) {
-            for (int c = 0; c < 3; c++) sum[c] += (line[x] >> (8 * c)) & 0xff;
-        }
-        for (int c = 0; c < 3; c++) s_one_band[e][c] = sum[c] / 256.0f / 255.0f;
-    }
-    s_one_back_w = 256 + 2 * m;
-    s_one_back_m = m;
-    // Each screen without its backmost layer.
-    for (int screen = 0; screen < 2; screen++) {
-        bool eng = screen == 0 ? a_top : !a_top;
-        int b = screen == 0 ? back : gpu2d_back_layer_2d(f, eng);
-        unsigned keep = GPU2D_KEEP_ALL & ~GPU2D_KEEP_BD & ~(b >= 0 ? GPU2D_KEEP_BG(b) : 0);
-        uint32_t dispcnt = (uint32_t) f->io[0] | f->io[1] << 8 | f->io[2] << 16 | (uint32_t) f->io[3] << 24;
-        bool with_3d = eng && (dispcnt & 8) && ((dispcnt >> 16) & 3) == 1;
-        gpu2d_render_part(f, eng, keep, buf, with_3d ? below : NULL, 0);
-        upload(s_one_tex[screen == 0 ? ONE_TOP : ONE_BOTTOM], buf, 256);
-        if (with_3d) upload(s_one_tex[screen == 0 ? ONE_TOP_BELOW : ONE_BOTTOM_BELOW], below, 256);
-        if (screen == 0) s_one_top_3d = with_3d;
-        else s_one_bottom_3d = with_3d;
-    }
+    // Menus: the two screens side by side, as they are (present_draw): nothing to prepare.
 }
 
 void present_set_wide(float aspect) { s_wide = aspect > 4.0f / 3.0f ? aspect / (4.0f / 3.0f) : 1.0f; }
@@ -342,6 +306,7 @@ void present_update(const FrameSnapshot *f, int scale) {
     int top_w = (int) (192 * 4.0f / 3.0f * s_wide + 0.5f) & ~1;
     if (top_w < 256) top_w = 256;
     if (top_w > GPU2D_MAX_W) top_w = GPU2D_MAX_W;
+    if (s_one && f->scene != 2) top_w = 256; // one screen, menus: the two screens side by side, as they are
     int margin = (top_w - 256) / 2;
     s_shown.width_top = top_w;
     s_shown.width_bottom = 256;
@@ -527,94 +492,6 @@ static void set_plain(int alpha_mode, float opacity) {
     glUniform1f(s_u_opacity, opacity);
 }
 
-// Engine A's part with its 3D layer, keyed (compose shader).
-static void draw_keyed_3d(GLuint above, GLuint below, GLuint tex3d, float x, float y, float pw, float ph, int w, int h) {
-    glUseProgram(s_prog_compose);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, above);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, below);
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, tex3d);
-    glUniform1f(s_u_k2, 1.0f);
-    glUniform1f(s_u_k3, 1.0f);
-    glUniform3fv(s_u_backdrop, 1, s_shown.backdrop);
-    glUniform1i(s_u_keyed, 1);
-    uint32_t mode = s_shown.bright >> 14, factor = s_shown.bright & 31;
-    if (factor > 16) factor = 16;
-    glUniform1i(s_u_bright_mode, (mode == 1 || mode == 2) ? (int) mode : 0);
-    glUniform1f(s_u_bright, factor / 16.0f);
-    glActiveTexture(GL_TEXTURE0);
-    draw_quad_uv(x, y, pw, ph, w, h, 0, 1);
-    glUniform1i(s_u_keyed, 0);
-}
-
-// One screen, menus: the background across the rectangle r, the top screen's part on the left, the touch screen's on
-// the right.
-static void draw_one_menu(const int *r, int w, int h, float t) {
-    float k = r[3] / 192.0f;               // surface pixels per DS pixel
-    float canvas = r[2] / k;               // the width in DS pixels
-    glBindFramebuffer(GL_FRAMEBUFFER, s_target);
-    glViewport(0, 0, w, h);
-    glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDisable(GL_BLEND);
-    // The two parts, as large as both fit side by side (with a little room between them).
-    float scale = (canvas - 6) / 512.0f;
-    if (scale > 1) scale = 1;
-    float pw = 256 * scale * k, ph = 192 * scale * k, py = r[1] + (r[3] - ph) / 2;
-    float gap = (canvas - 512 * scale) / 3 * k; // left, between, right
-    float x_top = r[0] + gap, x_bottom = r[0] + r[2] - pw - gap;
-    // Background: at the top screen's part's place and scale (what the top screen draws over it, such as the title
-    // screen's logo over its picture, stays where it belongs), continued to the edges: the extra columns of its
-    // texture to the right, its first and last lines repeated above and below.
-    set_plain(0, 1);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, s_one_tex[ONE_BACK]);
-    float ks = k * scale; // surface pixels per DS pixel of the parts
-    float c0 = s_one_back_m - (x_top - r[0]) / ks, c1 = s_one_back_m + (r[0] + r[2] - x_top) / ks;
-    glEnable(GL_SCISSOR_TEST);
-    for (int e = 0; e < 2; e++) {
-        int y0 = e ? (int) (py + ph) : r[1], y1 = e ? r[1] + r[3] : (int) (py + 0.5f);
-        if (y1 <= y0) continue;
-        glScissor(r[0], h - y1, r[2], y1 - y0);
-        glClearColor(s_one_band[e][0], s_one_band[e][1], s_one_band[e][2], 1);
-        glClear(GL_COLOR_BUFFER_BIT);
-    }
-    glDisable(GL_SCISSOR_TEST);
-    draw_quad_uvv((float) r[0], py, (float) r[2], ph, w, h, c0 / s_one_back_w, c1 / s_one_back_w, 0, 1);
-    GLuint tex3d = 0;
-    if ((s_one_top_3d || s_one_bottom_3d) && s_shown.snap) {
-        tex3d = gl3d_render(&s_frames3d[s_cur3d], s_have_prev ? &s_frames3d[s_cur3d ^ 1] : NULL, t, s_shown.snap,
-                            s_shown.scale, 1.0f);
-        glBindFramebuffer(GL_FRAMEBUFFER, s_target);
-        glViewport(0, 0, w, h);
-    }
-    // (after the 3D, which sets its own state)
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_STENCIL_TEST);
-    glEnable(GL_BLEND);
-    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    for (int part = 0; part < 2; part++) {
-        float x = part == 0 ? x_top : x_bottom;
-        bool with_3d = part == 0 ? s_one_top_3d : s_one_bottom_3d;
-        GLuint tex = s_one_tex[part == 0 ? ONE_TOP : ONE_BOTTOM];
-        if (with_3d && tex3d) {
-            draw_keyed_3d(tex, s_one_tex[part == 0 ? ONE_TOP_BELOW : ONE_BOTTOM_BELOW], tex3d, x, py, pw, ph, w, h);
-        } else {
-            set_plain(1, 1);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, tex);
-            draw_quad_uv(x, py, pw, ph, w, h, 0, 1);
-        }
-    }
-    glDisable(GL_BLEND);
-    s_one_touch[0] = x_bottom;
-    s_one_touch[1] = py;
-    s_one_touch[2] = pw;
-    s_one_touch[3] = ph;
-}
 
 // One screen, races: over the top screen (drawn already), the touch screen's map round in the lower right corner and
 // its sprites over it.
@@ -654,7 +531,11 @@ static void draw_one_race_hud(const int *r, int w, int h) {
     glBindTexture(GL_TEXTURE_2D, s_one_tex[ONE_HUD]);
     draw_quad_uv(x, y, pw, ph, w, h, 0, 1);
     glDisable(GL_BLEND);
-    s_one_touch[2] = s_one_touch[3] = 0; // nothing to touch in races
+    // The pause menu (Continue, Quit) shows there too: it can be touched (the on-screen buttons come first).
+    s_one_touch[0] = x;
+    s_one_touch[1] = y;
+    s_one_touch[2] = pw;
+    s_one_touch[3] = ph;
 }
 
 void present_draw(const int layout[8], int w, int h, float t) {
@@ -666,7 +547,17 @@ void present_draw(const int layout[8], int w, int h, float t) {
     if (one) {
         int only_top[8] = {layout[0], layout[1], layout[2], layout[3], 0, 0, 0, 0};
         if (s_one_kind == 1 && !s_alt) {
-            draw_one_menu(layout, w, h, t);
+            // Menus: the two screens side by side, each filling its half of the display (stretched to it).
+            int half = layout[2] / 2;
+            int sides[8] = {layout[0], layout[1], half, layout[3], layout[0] + half, layout[1], layout[2] - half,
+                            layout[3]};
+            s_stretch = true;
+            present_draw_screens(sides, w, h, t);
+            s_stretch = false;
+            s_one_touch[0] = (float) sides[4];
+            s_one_touch[1] = (float) sides[5];
+            s_one_touch[2] = (float) sides[6];
+            s_one_touch[3] = (float) sides[7];
             return;
         }
         if (s_alt && s_shown.snap) draw_alt(only_top, w, h, t);
@@ -701,6 +592,7 @@ void present_draw_screens(const int layout[8], int w, int h, float t) {
         float w2 = (float) (screen == 0 ? s_shown.width_top : s_shown.width_bottom), w3 = 256.0f * wide;
         float wq = engine_a && !s_shown.software && w3 > w2 ? w3 : w2; // the screen's width in DS pixels
         fit(&layout[screen * 4], wq / 192.0f, r);
+        if (s_stretch) memcpy(r, &layout[screen * 4], sizeof(r));
         if (s_shown.software) {
             glUseProgram(s_prog_plain);
             glActiveTexture(GL_TEXTURE0);

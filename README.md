@@ -63,15 +63,14 @@ example, its title, menus and artwork and its versions of the original courses a
 a mod changes the game's code, its sound archive is left out too (its sounds go with its code).
 
 ## One screen
-The game is shown on one widescreen picture, without a second screen:
-- **Races**: the race view fills the display; the touch screen's map shows round in the lower right corner, with the
-  ranking and the time over it. After the goal, the results and their menu (Next course, Replay, Quit) take that
-  place, and can be touched.
+The game fills the display, without empty bars:
+- **Races** (and their pause): the race view fills the display; the touch screen's map shows round in the lower right
+  corner, with the ranking and the time over it. After the goal, the results and their menu (Next course, Replay,
+  Quit) take that place, and can be touched.
 - **Grand Prix intros and the award ceremony**, which the DS shows with two cameras across both screens: one camera,
   one view.
-- **Menus**: one background across the width; what the DS shows on the top screen (titles, previews, the character
-  and kart models) on the left, the touch screen's choices on the right, without the screens' own backgrounds.
-  Touch the choices; outside races the game's buttons and the stick are not shown.
+- **Menus**: the two screens side by side as the game draws them, each filling its half of the display; touch the
+  right one. Outside races the game's buttons and the stick are not shown.
 
 ## Options
 **⚙** opens the options over the paused game: sections on the left, their settings on the right (touch, or a gamepad:

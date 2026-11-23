@@ -102,8 +102,14 @@ final class OptionsScreen {
         if (mSection < 0 || mSection >= SECTIONS.length) mSection = 0;
 
         mRoot = new FrameLayout(activity);
-        mRoot.setBackground(new Backdrop());
+        // Opaque: the game does not show through (a translucent view over the game's surface is drawn unevenly).
+        mRoot.setBackgroundColor(NAVY);
         mRoot.setClickable(true); // nothing reaches the game under it
+        mRoot.setTranslationZ(dp(64)); // over the on-screen controls
+        View backdrop = new View(activity);
+        backdrop.setBackground(new Backdrop());
+        mRoot.addView(backdrop, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
 
         LinearLayout row = new LinearLayout(activity);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -113,11 +119,11 @@ final class OptionsScreen {
         // Sidebar: the title, the sections, and Close at the bottom.
         mSidebar = new LinearLayout(activity);
         mSidebar.setOrientation(LinearLayout.VERTICAL);
-        mSidebar.setPadding(dp(24), dp(20), dp(12), dp(16));
+        mSidebar.setPadding(dp(20), dp(16), dp(8), dp(12));
         TextView title = new TextView(activity);
         title.setText("Options");
         title.setTextColor(Color.WHITE);
-        title.setTextSize(28);
+        title.setTextSize(24);
         title.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD_ITALIC));
         title.setShadowLayer(dp(3), 0, dp(2), 0x80000000);
         mSidebar.addView(title);
@@ -128,7 +134,7 @@ final class OptionsScreen {
         stripe.setBackground(stripeBg);
         LinearLayout.LayoutParams stripeLp = new LinearLayout.LayoutParams(dp(48), dp(4));
         stripeLp.topMargin = dp(4);
-        stripeLp.bottomMargin = dp(16);
+        stripeLp.bottomMargin = dp(12);
         mSidebar.addView(stripe, stripeLp);
         for (int i = 0; i < SECTIONS.length; i++) {
             final int index = i;
@@ -142,30 +148,36 @@ final class OptionsScreen {
             tab.setClickable(true);
             tab.setOnClickListener(v -> showSection(index));
             mTabs[i] = tab;
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
-            lp.bottomMargin = dp(6);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+            lp.bottomMargin = dp(4);
             mSidebar.addView(tab, lp);
         }
         View spring = new View(activity);
         mSidebar.addView(spring, new LinearLayout.LayoutParams(1, 0, 1));
         TextView close = pill("Close", false);
         close.setOnClickListener(v -> close());
-        mSidebar.addView(close, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
-        row.addView(mSidebar, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.3f));
+        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
+        closeLp.topMargin = dp(8);
+        mSidebar.addView(close, closeLp);
+        // On short displays the sidebar scrolls rather than squeezing its rows.
+        ScrollView sideScroll = new ScrollView(activity);
+        sideScroll.setFillViewport(true);
+        sideScroll.setVerticalScrollBarEnabled(false);
+        sideScroll.addView(mSidebar, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        row.addView(sideScroll, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.28f));
 
         // Content.
         mScroll = new ScrollView(activity);
         mScroll.setVerticalScrollBarEnabled(false);
         mScroll.setClipToPadding(false);
-        mScroll.setPadding(dp(12), dp(20), dp(28), dp(20));
+        mScroll.setPadding(dp(12), dp(16), dp(24), dp(16));
         mContent = new LinearLayout(activity);
         mContent.setOrientation(LinearLayout.VERTICAL);
         mScroll.addView(mContent);
-        row.addView(mScroll, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.7f));
+        row.addView(mScroll, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.72f));
 
         showSection(mSection);
-        mRoot.setAlpha(0f);
-        mRoot.animate().alpha(1f).setDuration(160).start();
     }
 
     View view() {
@@ -173,9 +185,7 @@ final class OptionsScreen {
     }
 
     void close() {
-        mRoot.animate().alpha(0f).setDuration(120).withEndAction(() -> {
-            if (mRoot.getParent() instanceof ViewGroup) ((ViewGroup) mRoot.getParent()).removeView(mRoot);
-        }).start();
+        if (mRoot.getParent() instanceof ViewGroup) ((ViewGroup) mRoot.getParent()).removeView(mRoot);
         mHost.onOptionsClosed();
     }
 
@@ -223,10 +233,9 @@ final class OptionsScreen {
             default: buildMods(); break;
         }
         mScroll.scrollTo(0, 0);
-        mContent.setAlpha(0f);
-        mContent.setTranslationY(dp(8));
-        mContent.animate().alpha(1f).translationY(0).setDuration(180).setInterpolator(new DecelerateInterpolator())
-                .start();
+        // The new section slides in a little (position only: no transparency over the game).
+        mContent.setTranslationY(dp(10));
+        mContent.animate().translationY(0).setDuration(180).setInterpolator(new DecelerateInterpolator()).start();
         mTabs[index].post(() -> mTabs[index].requestFocus());
     }
 
@@ -669,7 +678,7 @@ final class OptionsScreen {
         @Override
         public void draw(Canvas c) {
             float w = getBounds().width(), h = getBounds().height();
-            mPaint.setShader(new LinearGradient(0, 0, w, h, new int[] {0xf20a1a44, 0xf2123a9a, 0xf20a1a44}, null,
+            mPaint.setShader(new LinearGradient(0, 0, w, h, new int[] {0xff0a1a44, 0xff123a9a, 0xff0a1a44}, null,
                     Shader.TileMode.CLAMP));
             c.drawRect(0, 0, w, h, mPaint);
             mPaint.setShader(null);

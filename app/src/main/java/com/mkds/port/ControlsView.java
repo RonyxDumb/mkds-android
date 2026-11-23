@@ -12,8 +12,8 @@ import android.view.View;
 /**
  * Screen layout and touch controls for playing on a phone in landscape.
  *
- * One screen fills the display (gl/present.c makes it from both DS screens): in races the race view with the map in
- * a corner; elsewhere the menus on one background, what the touch screen shows on the right, where touches go.
+ * The game fills the display (gl/present.c): in races the race view with the map in a corner; elsewhere the two
+ * screens side by side, the touch screen on the right, where touches go.
  * Controls:
  *  - left half: a floating stick that appears where the thumb lands and stays with that finger (the D-pad);
  *  - right side: a big A with R right above it (one thumb between them holds both: accelerate and drift), B, L (item),
@@ -21,7 +21,7 @@ import android.view.View;
  *  - top: SELECT, START, the options and, outside races, NET (the network settings: local or online play);
  *    with voice chat on, MIC (the microphone on or off).
  * Outside races the game's buttons and the stick are not shown (the menus are touched); touches on the touch
- * screen's part of the picture go to the game as stylus input.
+ * screen go to the game as stylus input.
  */
 final class ControlsView extends View {
     private static final class Button {
