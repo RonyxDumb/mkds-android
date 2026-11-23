@@ -49,16 +49,43 @@ void *host_low_alloc(size_t size) {
     return p;
 }
 
-static uint8_t *alloc_stack(void) {
+// The stacks of the guest's threads: a thread that ended gives its stack back once it is joined (it ran on it until
+// the very end), so that the game can start threads again and again (online play starts one per connection).
+static pthread_t s_stack_thread[STACK_COUNT];
+static uint64_t s_stack_ended; // threads that ended and wait to be joined
+static pthread_key_t s_stack_key;
+static pthread_once_t s_stack_once = PTHREAD_ONCE_INIT;
+
+static void stack_thread_ended(void *slot) {
     pthread_mutex_lock(&s_arena_lock);
-    for (int i = 0; i < STACK_COUNT; i++) {
-        if (!(s_stack_used & (1ull << i))) {
-            s_stack_used |= 1ull << i;
+    s_stack_ended |= 1ull << ((uintptr_t) slot - 1);
+    pthread_mutex_unlock(&s_arena_lock);
+}
+
+static void stack_key_init(void) { pthread_key_create(&s_stack_key, stack_thread_ended); }
+
+static uint8_t *alloc_stack(void) {
+    for (int pass = 0; pass < 2; pass++) {
+        pthread_mutex_lock(&s_arena_lock);
+        for (int i = 0; i < STACK_COUNT; i++) {
+            if (!(s_stack_used & (1ull << i))) {
+                s_stack_used |= 1ull << i;
+                pthread_mutex_unlock(&s_arena_lock);
+                return s_stacks + (size_t) i * STACK_SIZE;
+            }
+        }
+        uint64_t ended = s_stack_ended;
+        s_stack_ended = 0;
+        pthread_mutex_unlock(&s_arena_lock);
+        // All in use: the stacks of the threads that ended come back.
+        for (int i = 0; i < STACK_COUNT; i++) {
+            if (!(ended & (1ull << i))) continue;
+            pthread_join(s_stack_thread[i], NULL);
+            pthread_mutex_lock(&s_arena_lock);
+            s_stack_used &= ~(1ull << i);
             pthread_mutex_unlock(&s_arena_lock);
-            return s_stacks + (size_t) i * STACK_SIZE;
         }
     }
-    pthread_mutex_unlock(&s_arena_lock);
     port_fatal("bridge: out of guest stacks");
 }
 
@@ -119,7 +146,11 @@ typedef struct Start {
 static void *thread_main(void *p) {
     Start *s = p;
     t_on_guest_stack = true;
-    s->fn(s->arg);
+    pthread_setspecific(s_stack_key, (void *) (uintptr_t) ((s->stack - s_stacks) / STACK_SIZE + 1));
+    void (*fn)(void *) = s->fn;
+    void *arg = s->arg;
+    free(s);
+    fn(arg);
     return NULL;
 }
 
@@ -127,15 +158,20 @@ void host_start_guest_thread(void (*fn)(void *), void *arg) {
     Start *s = malloc(sizeof(*s));
     s->fn = fn;
     s->arg = arg;
+    pthread_once(&s_stack_once, stack_key_init);
     s->stack = alloc_stack();
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setstack(&attr, s->stack, STACK_SIZE);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     pthread_t t;
+    // The slot's thread is set before the thread can end (the lock is held while it starts).
+    pthread_mutex_lock(&s_arena_lock);
     if (pthread_create(&t, &attr, thread_main, s) != 0) {
+        pthread_mutex_unlock(&s_arena_lock);
         port_fatal("bridge: pthread_create failed");
     }
+    s_stack_thread[(s->stack - s_stacks) / STACK_SIZE] = t;
+    pthread_mutex_unlock(&s_arena_lock);
     pthread_attr_destroy(&attr);
     (void) free_stack;
 }
