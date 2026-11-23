@@ -202,7 +202,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 if (!imported.renameTo(saveFile())) old.renameTo(saveFile());
             }
             // The language, and the options the game reads at its start (port/platform/os.c).
-            Native.setLanguage(mLanguage | (OptionsScreen.unlockAll(this) ? 0x100 : 0));
+            // 0x200: one screen (what the game shows on two screens is made for one, gl/present.c).
+            Native.setLanguage(mLanguage | 0x200 | (OptionsScreen.unlockAll(this) ? 0x100 : 0));
             applyGraphics();
             mOnline.applyVolume();
             String err = Native.start(romFile().getAbsolutePath(), saveFile().getAbsolutePath());

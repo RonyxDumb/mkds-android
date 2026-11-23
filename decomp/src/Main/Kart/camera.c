@@ -634,6 +634,15 @@ MtxFx43 *UpdateChainCameraPair(void) {
     } else {
         UpdateCameraEntry(gSecondChainCamera);
     }
+#ifdef PLATFORM_PORT
+    // One screen: the first camera's view every frame (the second one is the lower half of a view over both screens,
+    // or a shot of its own for the other screen).
+    if (port_option(PORT_OPTION_ONE_SCREEN)) {
+        UpdateCameraView(gFirstChainCamera);
+        gCurrentChainCamera = gFirstChainCamera;
+        return &gFirstChainCamera->mViewMatrix;
+    }
+#endif
     if (GetRaceUpdateFramesMod2() == 0) {
         UpdateCameraView(gFirstChainCamera);
         gCurrentChainCamera = gFirstChainCamera;

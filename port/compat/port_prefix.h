@@ -9,6 +9,7 @@ extern unsigned int g_port_draw_id;
 extern void *port_player_name(void *saved); // the player's name for races and other players (platform/os.c)
 // The app's options for the game, set before the start (platform/os.c).
 #define PORT_OPTION_UNLOCK_ALL 1 // every cup, class, character and kart: Grand Prix records with gold and three stars
+#define PORT_OPTION_ONE_SCREEN 2 // the app shows one screen: what the game spreads over both is made for one
 extern int port_option(int option);
 
 

@@ -109,6 +109,12 @@ static bool on_frame(const FrameSnapshot *f, uint64_t n) {
         fwrite(audio, 4, (size_t) samples, s_wav);
         s_wav_frames += (uint32_t) samples;
     }
+    bool dump = s_dump_every && n % s_dump_every == 0 &&
+                (!getenv("MKDS_DUMP_FROM") || n >= (uint64_t) atoi(getenv("MKDS_DUMP_FROM")));
+    if (!dump && ((f->io[0x67] & 0x80) || getenv("MKDS_EVERY"))) {
+        extern void host_capture_frame(const FrameSnapshot *f);
+        host_capture_frame(f);
+    }
     if (s_dump_every && n % s_dump_every == 0 && (!getenv("MKDS_DUMP_FROM") || n >= (uint64_t) atoi(getenv("MKDS_DUMP_FROM")))) {
         char path[512];
         snprintf(path, sizeof(path), "%s/frame_%05llu.png", s_out, (unsigned long long) n);
@@ -187,6 +193,7 @@ int main(int argc, char **argv) {
         g_port_vblank_hook = finish_hook;
     }
 #endif
+    int lang = 1;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--frames") && i + 1 < argc) s_frames = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--dump-every") && i + 1 < argc) s_dump_every = strtoull(argv[++i], NULL, 0);
@@ -195,7 +202,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--press") && i + 1 < argc) parse_press(argv[++i]);
         else if (!strcmp(argv[i], "--realtime")) rate = 59826;
         else if (!strcmp(argv[i], "--bglog")) s_bglog = true;
-        else if (!strcmp(argv[i], "--lang") && i + 1 < argc) guest_set_language(atoi(argv[++i]));
+        else if (!strcmp(argv[i], "--lang") && i + 1 < argc) lang = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--wide") && i + 1 < argc) {
             extern float g_host_aspect;
             g_host_aspect = (float) atof(argv[++i]);
@@ -212,6 +219,8 @@ int main(int argc, char **argv) {
             wav_header(s_wav, 0);
         }
     }
+    // MKDS_ONE: as the phone app, one screen (the game told through its options, see port_option).
+    guest_set_language(lang | (getenv("MKDS_ONE") ? 0x200 : 0));
     mkdir(s_out, 0755);
 #ifdef PORT_IPC
     // Two processes, as on arm64 Android: mkds_server (next to this program) runs the game in real time.

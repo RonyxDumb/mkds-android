@@ -145,9 +145,16 @@ static bool gl_frame(const FrameSnapshot *f, const char *path) {
         ready = true;
     }
     if (getenv("MKDS_DROPCAP") && f->number % 3 == 0) ((FrameSnapshot *) f)->io[0x67] &= 0x7f; // tests: as on phones
-    present_update(f, GL_SCALE);
     present_set_wide(g_host_aspect);
-    const int layout[8] = {0, 0, W, H / 2, 0, H / 2, W, H / 2};
+    present_update(f, GL_SCALE);
+    if (!path) return true; // the frame taken, not drawn
+    int layout[8] = {0, 0, W, H / 2, 0, H / 2, W, H / 2};
+    static int one = -1;
+    if (one < 0) one = getenv("MKDS_ONE") != NULL; // tests: the phone's one-screen picture (in the upper half)
+    if (one) {
+        int same[8] = {0, 0, W, H / 2, 0, 0, W, H / 2};
+        memcpy(layout, same, sizeof(layout));
+    }
     const char *interp = getenv("MKDS_INTERP"); // tests: draw the 3D between the last two frames
     present_draw(layout, W, H, interp ? (float) atof(interp) : 1.0f);
     static uint32_t pixels[768 * GL_SCALE * 384 * GL_SCALE], flipped[768 * GL_SCALE * 384 * GL_SCALE];
@@ -160,7 +167,51 @@ static bool gl_frame(const FrameSnapshot *f, const char *path) {
 
 float g_host_aspect = 4.0f / 3.0f; // --wide: the top screen's aspect ratio (OpenGL output only)
 
+// Tests (MKDS_PARTS): each layer of each engine alone, side by side (BG0..3, OBJ; transparent = grey), with the
+// layer settings in the name: path-parts.png.
+static void write_parts(const FrameSnapshot *f, const char *path) {
+    static uint32_t part[256 * 192], sheet[6 * 256 * 2 * 192];
+    for (int e = 0; e < 2; e++) {
+        for (int l = 0; l < 6; l++) {
+            int back = gpu2d_back_layer_2d(f, e == 0);
+            unsigned keep = l < 5 ? 1u << l : GPU2D_KEEP_ALL & ~GPU2D_KEEP_BD & ~(back >= 0 ? 1u << back : 0);
+            gpu2d_render_part(f, e == 0, keep, part, NULL, 0);
+            for (int y = 0; y < 192; y++) {
+                for (int x = 0; x < 256; x++) {
+                    uint32_t c = part[y * 256 + x];
+                    if (!(c >> 24)) c = ((x / 8 + y / 8) & 1) ? 0xff606060u : 0xff808080u;
+                    sheet[(e * 192 + y) * 1536 + l * 256 + x] = c;
+                }
+            }
+        }
+    }
+    char p[600];
+    snprintf(p, sizeof(p), "%s-parts.png", path);
+    write_png(p, sheet, 1536, 384);
+    const uint16_t *a = (const uint16_t *) f->io, *b = (const uint16_t *) (f->io + 0x1000);
+    port_log("parts %s: A dispcnt %04x%04x bgcnt %04x %04x %04x %04x | B dispcnt %04x%04x bgcnt %04x %04x %04x %04x | "
+             "A on top %d", path, a[1], a[0], a[4], a[5], a[6], a[7], b[1], b[0], b[4], b[5], b[6], b[7],
+             gpu2d_engine_a_on_top(f));
+}
+
 void host_write_frame(const FrameSnapshot *f, const char *path) {
+    if (getenv("MKDS_PARTS")) write_parts(f, path);
+    if (getenv("MKDS_POLYLOG")) { // tests: the 3D list's viewports and projection aspects
+        const Gx3dFrame *g = &f->frame3d;
+        int shown = 0;
+        uint32_t last = 0xffffffffu;
+        for (uint32_t i = 0; i < g->polygon_count && shown < 8; i++) {
+            const GxPolygon *p = &g->polygons[i];
+            uint32_t key = (uint32_t) p->viewport[0] | p->viewport[1] << 8 | p->viewport[2] << 16 |
+                           (uint32_t) p->viewport[3] << 24;
+            key ^= (uint32_t) p->aspect * 2654435761u;
+            if (key == last) continue;
+            last = key;
+            shown++;
+            port_log("poly %u: viewport %d %d %d %d aspect %04x", i, p->viewport[0], p->viewport[1], p->viewport[2],
+                     p->viewport[3], (unsigned) p->aspect);
+        }
+    }
 #ifdef HOST_GL
     if (gl_frame(f, path)) return;
 #endif
@@ -172,4 +223,21 @@ void host_write_frame(const FrameSnapshot *f, const char *path) {
     memcpy(out, screens[0], sizeof(screens[0]));
     memcpy(out + 256 * 192, screens[1], sizeof(screens[1]));
     write_png(path, out, 256, 384);
+}
+
+// A frame that is not written out but has a display capture: the capture is made as on the phones (the game shows
+// the captured pictures later: the race map, menu blurs).
+void host_capture_frame(const FrameSnapshot *f) {
+#ifdef HOST_GL
+    // As on the phones, every frame goes through the presentation (the dual-screen intros follow the frames).
+    static int every = -1;
+    if (every < 0) every = getenv("MKDS_EVERY") != NULL;
+    if (every) {
+        present_set_wide(g_host_aspect);
+        if (gl_frame(f, NULL)) return;
+    }
+#endif
+    static uint32_t screens[2][GPU2D_MAX_W * 192], layer3d[256 * 192];
+    soft3d_render(&f->frame3d, f, layer3d);
+    gpu2d_render(f, layer3d, screens[0], screens[1], 0);
 }

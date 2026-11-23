@@ -43,8 +43,6 @@ final class OptionsScreen {
     /** The largest 3D scale: 0 = as the display needs, 1 = DS resolution, 2..4. */
     static int maxScale(android.content.Context c) { return prefs(c).getInt("max_scale", 0); }
 
-    static boolean widescreen(android.content.Context c) { return prefs(c).getBoolean("widescreen", true); }
-
     /** The on-screen controls stay with a gamepad connected. */
     static boolean touchAlways(android.content.Context c) { return prefs(c).getBoolean("touch_always", false); }
 
@@ -119,10 +117,6 @@ final class OptionsScreen {
         int[] scales = {0, 1, 2, 3, 4};
         choice(graphics, "3D resolution", new String[] {"Auto", "1×", "2×", "3×", "4×"},
                 indexOf(scales, maxScale(activity)), i -> putInt("max_scale", scales[i]));
-        choice(graphics, "Widescreen", new String[] {"Off (4:3)", "On"}, widescreen(activity) ? 1 : 0,
-                i -> put("widescreen", i == 1));
-        choice(graphics, "Screens", new String[] {"Two", "One"},
-                prefs(activity).getBoolean("single_screen", false) ? 1 : 0, i -> put("single_screen", i == 1));
         note(graphics, "Display max draws extra frames between the game's own (90, 120, 144 Hz). Lower 3D "
                 + "resolution and 60 fps save battery on slower phones.");
 

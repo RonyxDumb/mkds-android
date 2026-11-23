@@ -12,16 +12,16 @@ import android.view.View;
 /**
  * Screen layout and touch controls for playing on a phone in landscape.
  *
- * The top screen fills the display in widescreen (the game draws the wider view), the touch screen sits as an inset
- * in the top right corner; the swap button exchanges them (the touch screen large and centred, for menus that are
- * easier to tap).
+ * One screen fills the display (gl/present.c makes it from both DS screens): in races the race view with the map in
+ * a corner; elsewhere the menus on one background, what the touch screen shows on the right, where touches go.
  * Controls:
  *  - left half: a floating stick that appears where the thumb lands and stays with that finger (the D-pad);
  *  - right side: a big A with R right above it (one thumb between them holds both: accelerate and drift), B, L (item),
  *    X and Y; a finger can slide from button to button;
- *  - top: SELECT, START, the screen swap and, outside races, NET (the network settings: local or online play);
+ *  - top: SELECT, START, the options and, outside races, NET (the network settings: local or online play);
  *    with voice chat on, MIC (the microphone on or off).
- * Touches on the touch screen go to the game as stylus input.
+ * Outside races the game's buttons and the stick are not shown (the menus are touched); touches on the touch
+ * screen's part of the picture go to the game as stylus input.
  */
 final class ControlsView extends View {
     private static final class Button {
@@ -40,22 +40,19 @@ final class ControlsView extends View {
         }
     }
 
-    private static final int SWAP = 1 << 30; // not a DS button
     private static final int NET = 1 << 29;  // not a DS button: opens the network settings
     private static final int MIC = 1 << 28;  // not a DS button: the voice chat's microphone
-    private static final int SCREENS = 1 << 27; // not a DS button: one or two screens
     private static final int OPT = 1 << 26; // not a DS button: the options screen
-    private static final int OWN = SWAP | NET | MIC | SCREENS | OPT;
+    private static final int OWN = NET | MIC | OPT;
 
     private final Button mA = new Button(Native.A, "A"), mB = new Button(Native.B, "B"), mX = new Button(Native.X, "X"),
             mY = new Button(Native.Y, "Y"), mL = new Button(Native.L, "L"), mR = new Button(Native.R, "R"),
             mStart = new Button(Native.START, "START"), mSelect = new Button(Native.SELECT, "SELECT"),
-            mSwap = new Button(SWAP, "⇄"), mNet = new Button(NET, "NET"),
-            mMic = new Button(MIC, "MIC"), mScreens = new Button(SCREENS, "2"), mOpt = new Button(OPT, "⚙");
-    private final Button[] mButtons = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mSwap, mNet, mMic, mScreens, mOpt};
+            mNet = new Button(NET, "NET"), mMic = new Button(MIC, "MIC"), mOpt = new Button(OPT, "⚙");
+    private final Button[] mButtons = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mNet, mMic, mOpt};
     private Runnable mOnNetwork, mOnMic, mOnOptions;
     // From the options screen (OptionsScreen): see applyOptions.
-    private boolean mWide = true, mTouchAlways, mAutoAccel, mBigDrift, mHaptics = true;
+    private boolean mTouchAlways, mAutoAccel, mBigDrift, mHaptics = true;
     private float mSizeScale = 1f, mOpacity = 1f;
     private long mAReleaseUntil; // auto-accelerate: A let go briefly when the A button is touched (a fresh press)
     private boolean mOnline, mVoice, mMicOn;
@@ -63,7 +60,7 @@ final class ControlsView extends View {
     private String mPlayerNames = ""; // the others' names
 
     // What each finger does, by pointer id.
-    private static final int ROLE_BUTTONS = 0, ROLE_STICK = 1, ROLE_STYLUS = 2;
+    private static final int ROLE_BUTTONS = 0, ROLE_STICK = 1, ROLE_STYLUS = 2, ROLE_NONE = 3;
 
     private static final class Finger {
         int role;
@@ -71,19 +68,18 @@ final class ControlsView extends View {
     }
 
     private final SparseArray<Finger> mFingers = new SparseArray<>();
-    private final RectF mTopRect = new RectF(), mBottomRect = new RectF();
-    private RectF mTouchRect = mBottomRect;
-    private boolean mSwapped;
-    // One screen: only the screen that matters is shown, the other one is not drawn at all: the top screen in
-    // races, the touch screen elsewhere (the menus' choices are there). The swap button shows the other one instead.
-    private boolean mSingle;
-    private boolean mShownRace; // what the layout was made for
+    private final RectF mTouchRect = new RectF(); // the touch screen's part of the picture (from the renderer)
+    private final float[] mTouchRectRaw = new float[4];
+    private boolean mRace; // the game shows a race: its buttons and the stick are there
     private final Runnable mWatchRace = new Runnable() {
         @Override
         public void run() {
-            if (mSingle && Native.isRace() != mShownRace) {
-                mSwapped = false; // each change of scene starts with the screen that matters
-                applyScreens();
+            boolean race = Native.isRace();
+            if (race != mRace) {
+                mRace = race;
+                mFingers.clear();
+                mTouchButtons = 0;
+                send();
                 invalidate();
             }
             if (mAutoAccel) send(); // A follows races starting and ending
@@ -111,9 +107,6 @@ final class ControlsView extends View {
 
     private void readOptions() {
         Context c = getContext();
-        mSingle = OptionsScreen.prefs(c).getBoolean("single_screen", false);
-        mScreens.label = mSingle ? "1" : "2";
-        mWide = OptionsScreen.widescreen(c);
         mTouchAlways = OptionsScreen.touchAlways(c);
         mAutoAccel = OptionsScreen.autoAccelerate(c);
         mBigDrift = OptionsScreen.bigDrift(c);
@@ -125,7 +118,6 @@ final class ControlsView extends View {
     /** The options screen changed something: read the options again and lay out anew. */
     void applyOptions() {
         readOptions();
-        mSwapped = false;
         if (mWidth > 0) layoutScreens(mWidth, mHeight);
         send();
     }
@@ -139,8 +131,8 @@ final class ControlsView extends View {
         mWidth = w;
         mHeight = h;
         float u = mUnit = Math.min(h / 8f, w / 15f);
-        Native.setWideAspect(mWide ? (float) w / h : 4f / 3f);
-        applyScreens();
+        Native.setWideAspect((float) w / h);
+        Native.setLayout(0, 0, w, h, 0, 0, w, h); // the same rectangle twice: one screen
 
         float b = u * mSizeScale; // the game's buttons, at the chosen size
         if (mBigDrift) {
@@ -164,48 +156,12 @@ final class ControlsView extends View {
         // Top: SELECT, START, swap.
         place(mSelect, w / 2f - u * 1.3f, u * 0.4f, u * 0.38f);
         place(mStart, w / 2f + u * 1.3f, u * 0.4f, u * 0.38f);
-        place(mSwap, u * 0.6f, u * 0.6f, u * 0.45f);
-        place(mNet, u * 1.75f, u * 0.6f, u * 0.45f);
-        place(mMic, u * 0.6f, u * 1.75f, u * 0.45f);
-        place(mScreens, u * 0.6f, u * 2.9f, u * 0.45f);
         place(mOpt, w / 2f + u * 2.6f, u * 0.4f, u * 0.38f);
+        place(mNet, w / 2f - u * 2.6f, u * 0.4f, u * 0.38f);
+        place(mMic, w / 2f - u * 3.6f, u * 0.4f, u * 0.38f);
         mText.setTextSize(u * 0.42f);
         mRing.setStrokeWidth(u * 0.06f);
         invalidate();
-    }
-
-    private void applyScreens() {
-        int w = mWidth, h = mHeight;
-        if (w == 0) return;
-        RectF top = mTopRect, bottom = mBottomRect;
-        if (mSingle) {
-            mShownRace = Native.isRace();
-            boolean showTop = mShownRace != mSwapped;
-            if (showTop) {
-                if (mWide) top.set(0, 0, w, h); // widescreen
-                else top.set((w - h * 4f / 3f) / 2f, 0, (w + h * 4f / 3f) / 2f, h);
-                bottom.set(0, 0, 0, 0);
-            } else {
-                bottom.set((w - h * 4f / 3f) / 2f, 0, (w + h * 4f / 3f) / 2f, h);
-                top.set(0, 0, 0, 0);
-            }
-            mTouchRect = bottom;
-            Native.setLayout(Math.round(top.left), Math.round(top.top), Math.round(top.width()), Math.round(top.height()),
-                    Math.round(bottom.left), Math.round(bottom.top), Math.round(bottom.width()),
-                    Math.round(bottom.height()));
-            return;
-        }
-        // The main screen fills the display (the top one is widescreen; the touch screen keeps 4:3, centred); the
-        // other one is an inset in the top right corner, as wide as the side margin of a 4:3 picture or more.
-        float ih = Math.max(h * 0.32f, (w - h * 4f / 3f) / 2f * 3f / 4f), iw = ih * 4f / 3f;
-        RectF main = mSwapped ? bottom : top, inset = mSwapped ? top : bottom;
-        if (mSwapped) main.set((w - h * 4f / 3f) / 2f, 0, (w + h * 4f / 3f) / 2f, h);
-        else if (mWide) main.set(0, 0, w, h);
-        else main.set((w - h * 4f / 3f) / 2f, 0, (w + h * 4f / 3f) / 2f, h);
-        inset.set(w - iw, 0, w, ih);
-        mTouchRect = bottom;
-        Native.setLayout(Math.round(top.left), Math.round(top.top), Math.round(top.width()), Math.round(top.height()),
-                Math.round(bottom.left), Math.round(bottom.top), Math.round(bottom.width()), Math.round(bottom.height()));
     }
 
     private static void place(Button b, float x, float y, float r) {
@@ -251,7 +207,10 @@ final class ControlsView extends View {
     // without voice chat.
     private boolean hidden(Button b, boolean race) {
         if (b.bits == MIC) return !mVoice;
-        return b.bits == NET ? race : mGamepadMode && !mTouchAlways && (b.bits & (SWAP | SCREENS | OPT)) == 0;
+        if (b.bits == NET) return race;
+        if ((b.bits & OWN) != 0 || b.bits == Native.START || b.bits == Native.SELECT) return mGamepadMode && !mTouchAlways
+                && b.bits != OPT;
+        return !race || (mGamepadMode && !mTouchAlways); // the game's buttons: in races
     }
 
     boolean isGamepadMode() {
@@ -329,25 +288,17 @@ final class ControlsView extends View {
             int bits = buttonsAt(x, y);
             if (bits != 0) {
                 f.role = ROLE_BUTTONS;
-                if ((bits & SCREENS) != 0) {
-                    mSingle = !mSingle;
-                    mSwapped = false;
-                    mScreens.label = mSingle ? "1" : "2";
-                    getContext().getSharedPreferences("mkds", Context.MODE_PRIVATE).edit()
-                            .putBoolean("single_screen", mSingle).apply();
-                    applyScreens();
-                } else if ((bits & SWAP) != 0) {
-                    mSwapped = !mSwapped;
-                    applyScreens();
-                } else if ((bits & NET) != 0 && mOnNetwork != null) {
+                if ((bits & NET) != 0 && mOnNetwork != null) {
                     mOnNetwork.run();
                 } else if ((bits & MIC) != 0 && mOnMic != null) {
                     mOnMic.run();
                 } else if ((bits & OPT) != 0 && mOnOptions != null) {
                     post(mOnOptions);
                 }
-            } else if (mTouchRect.width() > 0 && mTouchRect.contains(x, y)) {
+            } else if (touchRect() && mTouchRect.contains(x, y)) {
                 f.role = ROLE_STYLUS;
+            } else if (!Native.isRace()) {
+                f.role = ROLE_NONE; // outside the touch screen's part, in menus
             } else if (mGamepadMode) {
                 // The screen touched outside the touch screen with the gamepad's controls on: the on-screen controls
                 // come back (also when a built-in device was taken for a gamepad).
@@ -387,6 +338,8 @@ final class ControlsView extends View {
             case ROLE_STICK:
                 buttons |= stickDirection(f);
                 break;
+            case ROLE_NONE:
+                break;
             case ROLE_STYLUS:
                 touching = true;
                 mTouchX = clamp((int) ((f.x - mTouchRect.left) * 256 / mTouchRect.width()), 255);
@@ -407,6 +360,14 @@ final class ControlsView extends View {
         send();
         invalidate();
         return true;
+    }
+
+    // Where the renderer put the touch screen's part: false when there is none (races).
+    private boolean touchRect() {
+        Native.touchRect(mTouchRectRaw);
+        mTouchRect.set(mTouchRectRaw[0], mTouchRectRaw[1], mTouchRectRaw[0] + mTouchRectRaw[2],
+                mTouchRectRaw[1] + mTouchRectRaw[3]);
+        return mTouchRectRaw[2] > 0 && mTouchRectRaw[3] > 0;
     }
 
     private static int clamp(int v, int max) {
@@ -458,7 +419,7 @@ final class ControlsView extends View {
             mFill.setColor(0x70ffffff);
             c.drawCircle(f.x, f.y, mUnit * 0.5f, mFill);
         }
-        if ((!mGamepadMode || mTouchAlways) && (mFingers.size() == 0 || !hasStick())) {
+        if (race && (!mGamepadMode || mTouchAlways) && (mFingers.size() == 0 || !hasStick())) {
             // Where the stick goes.
             mRing.setAlpha(0x30);
             c.drawCircle(mUnit * 2.2f, mHeight - mUnit * 2.2f, mUnit * 1.2f, mRing);

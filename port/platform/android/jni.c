@@ -131,6 +131,15 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setGraphics(JNIEnv *env, jclass
     android_render_set_options(max_scale, interpolate);
 }
 
+// One screen: where the touch screen's part of the picture is (surface pixels x, y, w, h; w 0 when there is none).
+JNIEXPORT void JNICALL Java_com_mkds_port_Native_touchRect(JNIEnv *env, jclass cls, jfloatArray out) {
+    (void) cls;
+    extern void present_one_touch_rect(float *out);
+    float r[4];
+    present_one_touch_rect(r);
+    (*env)->SetFloatArrayRegion(env, out, 0, 4, r);
+}
+
 // Widescreen: the race view's aspect ratio (the whole display); applies from the next race.
 JNIEXPORT void JNICALL Java_com_mkds_port_Native_setWideAspect(JNIEnv *env, jclass cls, jfloat aspect) {
     (void) env, (void) cls;
