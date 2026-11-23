@@ -137,6 +137,17 @@ needs to go to the host and back, so their steering feels delayed on slow connec
 single skipped frame. The host plays without delay: the player with the best connection should create the group.
 Every player needs the same version of the app.
 
+## Nintendo WFC (Wiimmfi)
+**Nintendo WFC** in the main menu works again, through [Wiimmfi](https://wiimmfi.de), the community server that
+took over Nintendo Wi-Fi Connection: worldwide and regional races, friends and friend codes, as on the DS. The phone
+needs an internet connection; nothing has to be set up: the app plays the access point and the router the DS would
+connect to, and the game's Nintendo WFC settings get a connection to it the first time.
+- The first connection asks to save the Nintendo WFC configuration (Yes): the game then registers this phone with
+  Wiimmfi and gets its friend code.
+- Names of Nintendo's servers are asked of Wiimmfi's DNS server (167.235.229.36), as on a DS set up for Wiimmfi; when it
+  cannot be reached, the phone's own DNS looks them up under wiimmfi.de.
+- The game's network messages are in `log.txt` (lines starting with `wfc:`), for reporting problems.
+
 ## Meta Quest (VR)
 A second app, built from the same sources, shows the game on a large screen in VR through OpenXR (Quest 2, Pro, 3
 and 3S). It installs next to the phone app, with its own save file.

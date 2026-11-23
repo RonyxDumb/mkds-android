@@ -60,6 +60,20 @@ void hapi_net_send(const HostNetAddr *to, const void *data, uint32_t size);
 // The next datagram, or -1 when none is waiting.
 int32_t hapi_net_recv(void *data, uint32_t capacity, HostNetAddr *from);
 
+// Internet (Nintendo WFC through Wiimmfi, platform/wfc.c). Addresses are IPv4 in network order; handles >= 0.
+int32_t hapi_inet_open(int32_t tcp); // a non-blocking TCP or UDP socket, -1 on failure
+int32_t hapi_inet_connect(int32_t h, uint32_t ip, uint32_t port); // starts; 0 started, -1 failed
+int32_t hapi_inet_state(int32_t h); // TCP: 0 connecting, 1 connected, -1 failed
+// UDP: to ip:port; TCP: ip 0. Bytes sent, 0 when it would block, -1 on error.
+int32_t hapi_inet_send(int32_t h, const void *data, uint32_t size, uint32_t ip, uint32_t port);
+// Bytes, 0 when nothing is waiting, -1 on error, -2 when the other side closed (TCP).
+int32_t hapi_inet_recv(int32_t h, void *data, uint32_t capacity, HostNetAddr *from);
+void hapi_inet_close(int32_t h);
+uint32_t hapi_inet_resolve(const char *name); // blocking; 0 when unknown
+// The DS firmware's settings (flash), kept with the save file.
+uint32_t hapi_fw_read(void *data, uint32_t size);
+bool hapi_fw_write(const void *data, uint32_t size);
+
 #ifdef __cplusplus
 }
 #endif

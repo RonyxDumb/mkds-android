@@ -234,6 +234,8 @@ int main(int argc, char **argv) {
             wav_header(s_wav, 0);
         }
     }
+    extern int g_wm7_trace __attribute__((weak));
+    if (&g_wm7_trace && getenv("MKDS_WMTRACE")) g_wm7_trace = 1;
     // MKDS_ONE: as the phone app, one screen (the game told through its options, see port_option).
     guest_set_language(lang | (getenv("MKDS_ONE") ? 0x200 : 0));
     mkdir(s_out, 0755);

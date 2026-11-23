@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PORT = ROOT / "port"
-PLATFORM_GUEST = ["os.c", "mi.c", "card.c", "overlay.c", "services.c", "wireless.c", "wm7.c", "asm_replacements.c", "hw.c",
+PLATFORM_GUEST = ["os.c", "mi.c", "card.c", "overlay.c", "services.c", "wireless.c", "wm7.c", "wfc.c", "asm_replacements.c", "hw.c",
                   "gx3d.c", "frame.c", "sound.c", "libc.c"]
 
 

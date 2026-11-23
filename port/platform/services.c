@@ -165,14 +165,20 @@ static bool s_firmware_ready, s_firmware_wren;
 static u32 s_packet[8];
 static int s_packet_len;
 
+// The firmware is kept next to the save file (the Nintendo WFC connections and the user ID that WFC gives this
+// console are there).
 static void firmware_init(void) {
     if (s_firmware_ready) return;
     memset(s_firmware, 0xff, FIRMWARE_SIZE);
+    hapi_fw_read(s_firmware, FIRMWARE_SIZE);
     s_firmware[0x20] = (u8) (0x3fe00 / 8);
     s_firmware[0x21] = (u8) ((0x3fe00 / 8) >> 8);
     s_firmware_ready = true;
+    bool port_wfc_firmware(u8 *firmware); // wfc.c: the connection to the port's access point
+    if (port_wfc_firmware(s_firmware)) hapi_fw_write(s_firmware, FIRMWARE_SIZE);
 }
 
+extern int g_wm7_trace;
 static void firmware_packet(void) {
     u32 cmd = (s_packet[0] >> 8) & 0xff;
     u32 hi = s_packet[0] & 0xff;
@@ -180,6 +186,13 @@ static void firmware_packet(void) {
     switch (cmd) {
     case 0x23: { // read: addr, ?, size, buffer
         u32 addr = (hi << 16) | (s_packet[1] & 0xffff), size = s_packet[3] & 0xffff;
+        // The game reads its Nintendo WFC settings (three or four pages at once; a write is checked by reading back single
+        // pages): once it has set them up, the first connection becomes the port's access point.
+        if (g_wm7_trace) port_log("fw: read %05x+%x", addr, size);
+        if (addr == 0x3fa00 && size >= 0x300) {
+            bool port_wfc_firmware(u8 *firmware); // wfc.c
+            if (port_wfc_firmware(s_firmware)) hapi_fw_write(s_firmware, FIRMWARE_SIZE);
+        }
         u32 buf = (s_packet[4] & 0xffff) << 16 | (s_packet[5] & 0xffff);
         for (u32 i = 0; i < size; i++) ((u8 *) (uintptr_t) buf)[i] = s_firmware[(addr + i) % FIRMWARE_SIZE];
         break;
@@ -189,6 +202,7 @@ static void firmware_packet(void) {
         u32 buf = (s_packet[3] & 0xffff) << 16 | (s_packet[4] & 0xffff);
         for (u32 i = 0; i < size; i++) s_firmware[(addr + i) % FIRMWARE_SIZE] = ((u8 *) (uintptr_t) buf)[i];
         s_firmware_wren = false;
+        hapi_fw_write(s_firmware, FIRMWARE_SIZE);
         break;
     }
     case 0x22: { // status register into a byte of memory

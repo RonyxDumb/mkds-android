@@ -186,6 +186,22 @@ static bool s_scanning;
 static u64 s_scan_due_ns;
 static u32 s_scan_buf;
 
+// Nintendo WFC (wfc.c): the access point every scan finds, the connection to it and its data frames.
+const u8 *port_wfc_ap_mac(void);
+const char *port_wfc_ssid(void);
+int port_wfc_next_frame(u8 *out, u8 *src_mac, u8 *dst_mac);
+void port_wfc_frame_from_ds(const u8 *data, u32 len);
+void port_wfc_connected(const u8 *ds_mac);
+void port_wfc_disconnected(void);
+void port_wfc_poll(void);
+#define WFC_CHANNEL 6
+static bool s_wfc_scanning, s_wfc_linked;
+static u64 s_wfc_scan_due_ns;
+static u32 s_wfc_scan_buf;
+static u16 s_wfc_scan_channels, s_wfc_scan_ssid_len;
+static u8 s_wfc_scan_ssid[32];
+static u32 s_wfc_dcf_buf; // the receive buffer of WM_StartDCF (0: not started)
+
 // Join in progress.
 static bool s_joining;
 static int s_join_parent;
@@ -219,7 +235,8 @@ static WirelessMessage *new_message(u16 command, u16 result) {
     return (WirelessMessage *) m;
 }
 
-#define WM7_TRACE 0
+int g_wm7_trace; // tests: every command and message in the log (the test build: MKDS_WMTRACE)
+#define WM7_TRACE g_wm7_trace
 static void queue(WirelessMessage *m) {
     if (s_queue_count == MSG_SLOTS) {
         port_log("wm7: message queue full");
@@ -498,6 +515,66 @@ static void bss_desc(const Parent *p, WMBssDesc *d) {
     memcpy(&d->mGameInfo, p->beacon.game_info, gl);
 }
 
+// ------------------------------------------------------------------------------------------------ Nintendo WFC
+static void wfc_scan_result(void) {
+    s_wfc_scanning = false;
+    u16 channel = s_wfc_scan_channels ? (u16) (s_wfc_scan_channels & -s_wfc_scan_channels) : (u16) (1 << (WFC_CHANNEL - 1));
+    const char *ssid = port_wfc_ssid();
+    u16 ssid_len = (u16) strlen(ssid);
+    bool found = (s_wfc_scan_channels & (1 << (WFC_CHANNEL - 1))) &&
+                 (!s_wfc_scan_ssid_len || (s_wfc_scan_ssid_len <= ssid_len && !memcmp(s_wfc_scan_ssid, ssid, s_wfc_scan_ssid_len)));
+    WirelessMessage *m = new_message(WIRELESS_REQUEST_BEGIN_SEARCH_CHANNELS, 0);
+    U16(m, 8) = found ? WIRELESS_STATE_HOST_SIGHTED : WIRELESS_STATE_SEARCH_EMPTY;
+    U16(m, 0x0a) = found ? (u16) (1 << (WFC_CHANNEL - 1)) : channel;
+    if (found && s_wfc_scan_buf) {
+        WMBssDesc *d = PTR(s_wfc_scan_buf);
+        memset(d, 0, 0x40);
+        d->mLength = 0x40 / 2;
+        d->mRssi = 50;
+        memcpy(d->mBssid, port_wfc_ap_mac(), 6);
+        d->mSsidLength = ssid_len;
+        memcpy(d->mSsid, ssid, ssid_len);
+        d->mCapaInfo = 0x0001; // an access point (ESS), open
+        d->mRateSet.mBasic = 3;
+        d->mRateSet.mSupport = 0xf;
+        d->mBeaconPeriod = 100;
+        d->mDtimPeriod = 1;
+        d->mChannel = WFC_CHANNEL;
+        U16(m, 0x0e) = 1;               // descriptions
+        U32(m, 0x10) = s_wfc_scan_buf;  // the first one
+        U16(m, 0x50) = 3;               // its link level
+    }
+    queue(m);
+}
+
+// Frames from the router to the DS, through the receive buffer of WM_StartDCF; each one handled at once.
+static void wfc_deliver_frames(void) {
+    if (!s_wfc_dcf_buf) return;
+    u8 *rb = PTR(s_wfc_dcf_buf);
+    for (int i = 0; i < 16; i++) {
+        u8 src[6], dst[6];
+        int n = port_wfc_next_frame(rb + 0x2c, src, dst);
+        if (n <= 0) break;
+        memset(rb, 0, 0x2c);
+        U16(rb, 6) = (u16) n;
+        rb[0xf] = 50; // RSSI
+        memcpy(rb + 0x18, dst, 6);
+        memcpy(rb + 0x1e, src, 6);
+        WirelessMessage *m = new_message(WIRELESS_REQUEST_BEGIN_FRAME_MODE, 0);
+        U16(m, 4) = WIRELESS_STATE_DCF_FRAME_RECEIVED;
+        U32(m, 8) = s_wfc_dcf_buf;
+        deliver(m);
+    }
+}
+
+static void wfc_leave(void) {
+    if (s_wfc_linked) port_wfc_disconnected();
+    s_wfc_linked = false;
+    s_wfc_dcf_buf = 0;
+    s_wfc_scanning = false;
+    if (s_status) s_status->mDcfFlag = 0;
+}
+
 // ------------------------------------------------------------------------------------------------ commands
 static void net_start(void) {
     // Each time the wireless starts: the host side reads the network settings again (local or online play).
@@ -506,6 +583,7 @@ static void net_start(void) {
 }
 
 static void stop_everything(void) {
+    wfc_leave();
     leave_all(false);
     drop_sends();
     s_parent = s_child = false;
@@ -730,9 +808,19 @@ void port_wm7_command(u32 address) {
     case WIRELESS_REQUEST_BEGIN_SEARCH: // WM_StartScan
         start_scan(U32(buf, 4), U16(buf, 8));
         break;
-    case WIRELESS_REQUEST_BEGIN_SEARCH_CHANNELS: // WM_StartScanEx
-        start_scan(U32(buf, 4), U16(buf, 0x0a));
+    case WIRELESS_REQUEST_BEGIN_SEARCH_CHANNELS: { // WM_StartScanEx: the Nintendo WFC access point
+        s_wfc_scanning = true;
+        s_wfc_scan_buf = U32(buf, 4);
+        s_wfc_scan_channels = U16(buf, 2);
+        s_wfc_scan_ssid_len = U16(buf, 0x14) > 32 ? 32 : U16(buf, 0x14);
+        memcpy(s_wfc_scan_ssid, buf + 0x16, 32);
+        u16 ms = U16(buf, 0x0a);
+        s_wfc_scan_due_ns = now_ns() + (u64) (ms < 10 ? 10 : ms > 100 ? 100 : ms) * 1000000ull;
+        set_state(WIRELESS_UNIT_STATE_SCANNING);
+        if (WM7_TRACE) port_log("wm7: scan channels %04x ssid %d '%.*s' type %d", s_wfc_scan_channels,
+                                s_wfc_scan_ssid_len, s_wfc_scan_ssid_len, s_wfc_scan_ssid, U16(buf, 0x12));
         break;
+    }
     case WIRELESS_REQUEST_STOP_SEARCH: // WM_EndScan
         s_scanning = false;
         set_state(WIRELESS_UNIT_STATE_POWERED_ON);
@@ -740,6 +828,17 @@ void port_wm7_command(u32 address) {
         break;
     case WIRELESS_REQUEST_ENTER_HOST: { // WM_StartConnectEx
         const WMBssDesc *d = PTR(U32(buf, 4));
+        if (d && !memcmp(d->mBssid, port_wfc_ap_mac(), 6)) { // the Nintendo WFC access point
+            s_wfc_linked = true;
+            port_wfc_connected(s_mac);
+            set_state(WIRELESS_UNIT_STATE_CHILD_CONNECTED);
+            m = new_message(id, 0);
+            U16(m, 8) = WIRELESS_STATE_LINKED;
+            U16(m, 0x0a) = 1; // AID
+            memcpy((u8 *) m + 0x10, d->mBssid, 6);
+            queue(m);
+            break;
+        }
         int found = -1;
         for (int i = 0; d && i < MAX_PARENTS; i++) {
             if (s_parents[i].used && !memcmp(s_parents[i].mac, d->mBssid, 6)) found = i;
@@ -760,6 +859,15 @@ void port_wm7_command(u32 address) {
     }
     case WIRELESS_REQUEST_LEAVE: { // WM_Disconnect, WM_DisconnectChildren
         u16 bitmap = (u16) p[0], done = 0;
+        if (s_wfc_linked) {
+            wfc_leave();
+            set_state(WIRELESS_UNIT_STATE_POWERED_ON);
+            m = new_message(id, 0);
+            U16(m, 8) = bitmap;
+            U16(m, 0x0a) = 1;
+            queue(m);
+            break;
+        }
         if (s_parent) {
             for (int a = 1; a < MAX_LINKS; a++) {
                 if (!(bitmap & (1 << a)) || !s_links[a].used) continue;
@@ -814,6 +922,24 @@ void port_wm7_command(u32 address) {
     case WIRELESS_REQUEST_SET_JOIN_ALLOWED: // WM_SetEntry
         s_attr = (u8) ((s_attr & ~WIRELESS_ATTRIBUTE_ENTRY) | (p[0] ? WIRELESS_ATTRIBUTE_ENTRY : 0));
         s_beacon_ns = 0;
+        reply(id, 0);
+        break;
+    case WIRELESS_REQUEST_BEGIN_FRAME_MODE: // WM_StartDCF: data frames with the access point
+        s_wfc_dcf_buf = p[0];
+        if (s_status) s_status->mDcfFlag = 1;
+        set_state(WIRELESS_UNIT_STATE_CHILD_WITH_DCF);
+        m = new_message(id, 0);
+        U16(m, 4) = WIRELESS_STATE_DCF_RUNNING;
+        queue(m);
+        break;
+    case WIRELESS_REQUEST_QUEUE_FRAME_DATA: // WM_SetDCFData: a frame for the router
+        if (s_wfc_linked && p[3]) port_wfc_frame_from_ds(PTR(p[2]), p[3] & 0xffff);
+        reply(id, 0);
+        break;
+    case WIRELESS_REQUEST_STOP_FRAME_MODE: // WM_EndDCF
+        s_wfc_dcf_buf = 0;
+        if (s_status) s_status->mDcfFlag = 0;
+        set_state(WIRELESS_UNIT_STATE_CHILD_CONNECTED);
         reply(id, 0);
         break;
     case WIRELESS_REQUEST_MEASURE_CHANNEL: // WM_MeasureChannel: every channel is free
@@ -1270,14 +1396,33 @@ static void receive(const u8 *buf, int32_t n, const HostNetAddr *from) {
 }
 
 // ------------------------------------------------------------------------------------------------ the interrupt
-bool port_wm7_active(void) { return s_net && s_status && s_status->mState != WIRELESS_UNIT_STATE_DISABLED; }
+bool port_wm7_active(void) { return s_status && s_status->mState != WIRELESS_UNIT_STATE_DISABLED; }
 
 // Called at the OS's interrupt points: network input, timers, then the messages for the ARM9. True when a message
 // was delivered.
 bool port_wm7_poll(void) {
-    if (!s_net) return false;
+    if (!s_status) return false;
     u64 now = now_ns();
     bool ran = false;
+    if (s_wfc_scanning && now >= s_wfc_scan_due_ns) wfc_scan_result();
+    if (s_wfc_linked) {
+        static u64 s_wfc_poll_ns;
+        if (since(now, s_wfc_poll_ns) >= 1000000ull) {
+            s_wfc_poll_ns = now;
+            port_wfc_poll();
+        }
+        wfc_deliver_frames();
+    }
+    if (!s_net) {
+        for (int guard = 0; s_queue_count && guard < MSG_SLOTS; guard++) {
+            WirelessMessage *m = s_queue[s_queue_head];
+            s_queue_head = (s_queue_head + 1) % MSG_SLOTS;
+            s_queue_count--;
+            deliver(m);
+            ran = true;
+        }
+        return ran;
+    }
     static u64 s_prev;
     if (WM7_TRACE && s_prev && now - s_prev > 100000000ull) port_log("wm7: no poll for %d ms", (int) ((now - s_prev) / 1000000));
     s_prev = now;

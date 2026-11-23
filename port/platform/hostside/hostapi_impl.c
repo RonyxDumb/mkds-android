@@ -455,3 +455,153 @@ int32_t hapi_net_recv(void *data, uint32_t capacity, HostNetAddr *from) {
     }
     return -1;
 }
+
+// ------------------------------------------------------------------------------------------------ internet
+#include <poll.h>
+// Sockets to the internet for Nintendo WFC through Wiimmfi (platform/wfc.c, the router the DS connects to). Handles
+// are the file descriptors; everything is non-blocking but the name lookup.
+static struct {
+    int (*connect)(int, const struct sockaddr *, socklen_t);
+    ssize_t (*send)(int, const void *, size_t, int);
+    ssize_t (*recv)(int, void *, size_t, int);
+    int (*getsockopt)(int, int, int, void *, socklen_t *);
+    int (*close)(int);
+} libc_inet;
+
+static bool libc_inet_load(void) {
+    if (libc_inet.connect) return true;
+    if (!libc_net_load()) return false;
+#ifdef __ANDROID__
+    void *libc = dlopen("libc.so", RTLD_NOW);
+#else
+    void *libc = dlopen("libc.so.6", RTLD_NOW);
+#endif
+    if (!libc) return false;
+    libc_inet.connect = (int (*)(int, const struct sockaddr *, socklen_t)) dlsym(libc, "connect");
+    libc_inet.send = (ssize_t (*)(int, const void *, size_t, int)) dlsym(libc, "send");
+    libc_inet.recv = (ssize_t (*)(int, void *, size_t, int)) dlsym(libc, "recv");
+    libc_inet.getsockopt = (int (*)(int, int, int, void *, socklen_t *)) dlsym(libc, "getsockopt");
+    libc_inet.close = (int (*)(int)) dlsym(libc, "close");
+    return libc_inet.connect && libc_inet.send && libc_inet.recv && libc_inet.getsockopt && libc_inet.close;
+}
+
+int32_t hapi_inet_open(int32_t tcp) {
+    if (!libc_inet_load()) return -1;
+    int fd = libc_net.socket(AF_INET, tcp ? SOCK_STREAM : SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+    if (tcp) {
+        int one = 1;
+        libc_net.setsockopt(fd, IPPROTO_TCP, 1 /* TCP_NODELAY */, &one, sizeof(one));
+    } else {
+        struct sockaddr_in a = {0};
+        a.sin_family = AF_INET;
+        libc_net.bind(fd, (struct sockaddr *) &a, sizeof(a)); // an ephemeral port
+    }
+    return fd;
+}
+
+int32_t hapi_inet_connect(int32_t h, uint32_t ip, uint32_t port) {
+    struct sockaddr_in a = {0};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = ip;
+    a.sin_port = htons((uint16_t) port);
+    if (libc_inet.connect(h, (struct sockaddr *) &a, sizeof(a)) == 0) return 0;
+    return errno == EINPROGRESS || errno == EAGAIN ? 0 : -1;
+}
+
+int32_t hapi_inet_state(int32_t h) {
+    struct pollfd p = {h, POLLOUT, 0};
+    if (poll(&p, 1, 0) <= 0) return 0;
+    int err = 0;
+    socklen_t len = sizeof(err);
+    if (libc_inet.getsockopt(h, SOL_SOCKET, SO_ERROR, &err, &len) != 0 || err != 0) return -1;
+    return 1;
+}
+
+int32_t hapi_inet_send(int32_t h, const void *data, uint32_t size, uint32_t ip, uint32_t port) {
+    ssize_t n;
+    if (ip) {
+        struct sockaddr_in a = {0};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = ip;
+        a.sin_port = htons((uint16_t) port);
+        n = libc_net.sendto(h, GUEST_PTR(data), size, 0, (struct sockaddr *) &a, sizeof(a));
+    } else {
+        n = libc_inet.send(h, GUEST_PTR(data), size, MSG_NOSIGNAL);
+    }
+    if (n >= 0) return (int32_t) n;
+    return errno == EAGAIN || errno == EWOULDBLOCK ? 0 : -1;
+}
+
+int32_t hapi_inet_recv(int32_t h, void *data, uint32_t capacity, HostNetAddr *from) {
+    struct sockaddr_in a = {0};
+    socklen_t len = sizeof(a);
+    ssize_t n = libc_net.recvfrom(h, GUEST_PTR(data), capacity, 0, (struct sockaddr *) &a, &len);
+    if (n > 0) {
+        if (from) {
+            HostNetAddr *f = GUEST_PTR(from);
+            f->ip = a.sin_addr.s_addr;
+            f->port = ntohs(a.sin_port);
+        }
+        return (int32_t) n;
+    }
+    if (n == 0) return -2; // the other side closed (TCP)
+    return errno == EAGAIN || errno == EWOULDBLOCK ? 0 : -1;
+}
+
+void hapi_inet_close(int32_t h) {
+    if (h >= 0 && libc_inet_load()) libc_inet.close(h);
+}
+
+// The address of a host name (network order), 0 when unknown. Blocking. The test build can name addresses itself:
+// MKDS_HOSTS="name=a.b.c.d,name=..." (a local server standing for one on the internet).
+uint32_t hapi_inet_resolve(const char *name_guest) {
+    const char *name = GUEST_PTR(name_guest);
+    const char *hosts = getenv("MKDS_HOSTS");
+    if (hosts) {
+        size_t nl = strlen(name);
+        for (const char *p = hosts; *p;) {
+            const char *eq = strchr(p, '='), *end = strchr(p, ',');
+            if (!end) end = p + strlen(p);
+            if (eq && eq < end && (size_t) (eq - p) == nl && !strncmp(p, name, nl)) {
+                char ip[32];
+                snprintf(ip, sizeof(ip), "%.*s", (int) (end - eq - 1), eq + 1);
+                return inet_addr(ip);
+            }
+            p = *end ? end + 1 : end;
+        }
+    }
+    if (!libc_inet_load() || !libc_net.getaddrinfo) return 0;
+    struct addrinfo hint = {0}, *res = NULL;
+    hint.ai_family = AF_INET;
+    if (libc_net.getaddrinfo(name, NULL, &hint, &res) != 0 || !res) {
+        port_log("wfc: cannot resolve %s", name);
+        return 0;
+    }
+    uint32_t ip = ((struct sockaddr_in *) res->ai_addr)->sin_addr.s_addr;
+    libc_net.freeaddrinfo(res);
+    return ip;
+}
+
+// The DS firmware's settings (the Nintendo WFC connections and user ID), kept next to the save file: "<save>.fw".
+uint32_t hapi_fw_read(void *data, uint32_t size) {
+    char path[600];
+    snprintf(path, sizeof(path), "%s.fw", s_save_path[0] ? s_save_path : "mkds");
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    size_t n = fread(GUEST_PTR(data), 1, size, f);
+    fclose(f);
+    return (uint32_t) n;
+}
+
+bool hapi_fw_write(const void *data, uint32_t size) {
+    char path[600], tmp[620];
+    snprintf(path, sizeof(path), "%s.fw", s_save_path[0] ? s_save_path : "mkds");
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return false;
+    fwrite(GUEST_PTR(data), 1, size, f);
+    fclose(f);
+    return rename(tmp, path) == 0;
+}
