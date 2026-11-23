@@ -34,7 +34,6 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         return new File(getFilesDir(), "rom.nds");
     }
 
-    @Override
     // The console's identity (its wireless address, "<save>.mac", and the Nintendo WFC user ID in its firmware,
     // "<save>.fw") belongs to this device. Android copies an app's files to a new phone (backup, device transfer):
     // both phones were then the same console, with the same friend code. On another device (or the first time this
@@ -63,6 +62,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
