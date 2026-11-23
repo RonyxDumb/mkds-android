@@ -10,7 +10,7 @@ DS hardware replaced by a native platform layer (OpenGL ES 3 graphics, native so
 ## Features
 - Native performance on 32-bit and 64-bit ARM phones
 - High-resolution 3D rendering
-- Full widescreen: races, menus and award ceremonies fill the whole display
+- One widescreen screen: the two DS screens are made into one picture that fills the display (see below)
 - 120 fps (and higher) on high refresh rate displays, through frame interpolation
 - Touch controls designed for phones, with a floating stick
 - Gamepad support (USB and Bluetooth); on-screen controls hide automatically
@@ -41,21 +41,30 @@ DS hardware replaced by a native platform layer (OpenGL ES 3 graphics, native so
 | **L** | Use item |
 | **X**, **Y** | As on the DS |
 | **SELECT**, **START** | As on the DS |
-| ⇄ | Swap the screens: the touch screen becomes large, for menus |
 | **MIC** (with voice chat) | Microphone on / off |
 | **NET** (outside races) | Network settings: local or online play |
 | **⚙** | Options (also the gamepad's home button) |
-| Touch screen (inset) | Stylus input |
+| The menus' choices (right part of the picture) | Stylus input |
 
 The Android back gesture pauses the game during a race and does nothing elsewhere.
 
-With a gamepad connected, the on-screen controls are hidden (the screen swap button stays). If the gamepad
+With a gamepad connected, the on-screen controls are hidden (the options button stays). If the gamepad
 disconnects during a race, the game pauses and the touch controls come back. L2/R2 also work as L/R.
 
-## Options
+## One screen
+The game is shown on one widescreen picture, without a second screen:
+- **Races**: the race view fills the display; the touch screen's map shows round in the lower right corner, with the
+  ranking and the time over it. After the goal, the results and their menu (Next course, Replay, Quit) take that
+  place, and can be touched.
+- **Grand Prix intros and the award ceremony**, which the DS shows with two cameras across both screens: one camera,
+  one view.
+- **Menus**: one background across the width; what the DS shows on the top screen (titles, previews, the character
+  and kart models) on the left, the touch screen's choices on the right, without the screens' own backgrounds.
+  Touch the choices; outside races the game's buttons and the stick are not shown.
+
 **⚙** opens the options over the paused game, in three columns:
 - **Graphics**: frame rate (60 fps, or the display's maximum with interpolated frames), 3D resolution (auto or 1× to
-  4×), widescreen on or off, one or two screens.
+  4×).
 - **Controls**: on-screen controls hidden with a gamepad or always shown, auto-accelerate (A held in races, B still
   brakes: one thumb steers, the other drifts with R), the drift button above A or large and apart, button size and
   opacity, vibration.

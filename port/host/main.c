@@ -170,8 +170,23 @@ static void parse_press(const char *spec) {
 extern void (*g_port_vblank_hook)(void) __attribute__((weak));
 extern uint64_t g_frame_count __attribute__((weak));
 void FinishRaceProgressKartWithEndKind(int32_t kartIndex, int32_t endKind) __attribute__((weak));
+int GetCurrentSceneNumber(void) __attribute__((weak));
 static uint64_t s_finish_at;
 static void finish_hook(void) {
+    static uint64_t every = 0;
+    if (!every && getenv("MKDS_FINISH_EVERY")) every = strtoull(getenv("MKDS_FINISH_EVERY"), NULL, 0);
+    // MKDS_FINISH_WIN: the player's kart first, the others half a second later.
+    static int win = -1;
+    if (win < 0) win = getenv("MKDS_FINISH_WIN") != NULL;
+    if (s_finish_at && every && g_frame_count > s_finish_at && GetCurrentSceneNumber() == 2) {
+        uint64_t phase = (g_frame_count - s_finish_at) % every;
+        if (phase == 0) {
+            for (int k = win ? 0 : 0; k < (win ? 1 : 8); k++) FinishRaceProgressKartWithEndKind(k, 0);
+            port_log("test: race finished");
+        } else if (win && phase == 30) {
+            for (int k = 1; k < 8; k++) FinishRaceProgressKartWithEndKind(k, 0);
+        }
+    }
     if (s_finish_at && g_frame_count == s_finish_at) {
         for (int k = 0; k < 8; k++) FinishRaceProgressKartWithEndKind(k, 0);
         port_log("test: race finished");

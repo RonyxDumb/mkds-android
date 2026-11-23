@@ -245,6 +245,16 @@ static void one_update(const FrameSnapshot *f, bool race, int canvas_w) {
         }
         gpu2d_render_part(f, eng, GPU2D_KEEP_BG(0) | GPU2D_KEEP_BG(1) | GPU2D_KEEP_BG(2) | GPU2D_KEEP_BG(3) |
                                       GPU2D_KEEP_BD, buf, NULL, 0);
+        // No map yet (black: the battle intros): nothing is shown.
+        int lit = 0;
+        for (int i = 0; i < 256 * 192; i += 97) {
+            uint32_t c = buf[i];
+            lit += (c & 0xff) + ((c >> 8) & 0xff) + ((c >> 16) & 0xff) > 90;
+        }
+        if (lit < 256 * 192 / 97 / 20) {
+            s_one_hud = false;
+            return;
+        }
         upload(s_one_tex[ONE_MAP], buf, 256);
         gpu2d_render_part(f, eng, GPU2D_KEEP_OBJ, buf, NULL, 0);
         upload(s_one_tex[ONE_HUD], buf, 256);
