@@ -791,6 +791,18 @@ static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a,
                 edge[1][y] = row[margin + 255];
             }
             e.ext_bg = bg;
+            // A picture whose right edge runs on into its left edge (menu backgrounds: gradients, checkers, stripes)
+            // goes on as it is drawn, repeating; only one that does not (an illustration) is continued blurred.
+            int seamless = 0, lines = 0;
+            for (int y = 0; y < 192; y++) {
+                uint16_t l = edge[0][y], r = edge[1][y];
+                if (!((l | r) & 0x8000)) continue;
+                lines++;
+                int d = abs((l & 31) - (r & 31)) + abs(((l >> 5) & 31) - ((r >> 5) & 31)) +
+                        abs(((l >> 10) & 31) - ((r >> 10) & 31));
+                if ((l & 0x8000) && (r & 0x8000) && d <= 6) seamless++;
+            }
+            if (lines && seamless * 100 >= lines * 85) goto no_side;
             for (int k = 0; k < 2; k++) {
                 for (int y = 0; y < 192; y++) {
                     int sum[3] = {0, 0, 0}, n = 0, opaque = 0;
@@ -811,6 +823,7 @@ static void render_engine(const FrameSnapshot *f, const VramMap *map, bool is_a,
             }
             e.side[0] = side[0];
             e.side[1] = side[1];
+        no_side:;
         }
     }
     int width = 256 + 2 * margin;

@@ -51,6 +51,17 @@ The Android back gesture pauses the game during a race and does nothing elsewher
 With a gamepad connected, the on-screen controls are hidden (the options button stays). If the gamepad
 disconnects during a race, the game pauses and the touch controls come back. L2/R2 also work as L/R.
 
+## Mods
+**⚙ → Mods → Add a mod…** takes an **.xdelta** patch made for Mario Kart DS (Europe), the usual way ROM hacks are
+shared, or a ROM already patched; the app applies the patch to your ROM itself. Choose the mod in the list (or None)
+and the game restarts with it. Each mod keeps its own save file.
+
+The game's code here is the port's (the decompilation compiled for the phone), not the ROM's, so a mod brings its
+files: every file of the game that the mod changes (graphics, models, courses that take the place of the original
+ones, music, texts) is used. Courses, cups and menus that a mod adds with its own code are not: with CTGP Nitro, for
+example, its title, menus and artwork and its versions of the original courses are there, its new courses are not. When
+a mod changes the game's code, its sound archive is left out too (its sounds go with its code).
+
 ## One screen
 The game is shown on one widescreen picture, without a second screen:
 - **Races**: the race view fills the display; the touch screen's map shows round in the lower right corner, with the
@@ -62,7 +73,9 @@ The game is shown on one widescreen picture, without a second screen:
   and kart models) on the left, the touch screen's choices on the right, without the screens' own backgrounds.
   Touch the choices; outside races the game's buttons and the stick are not shown.
 
-**⚙** opens the options over the paused game, in three columns:
+## Options
+**⚙** opens the options over the paused game: sections on the left, their settings on the right (touch, or a gamepad:
+L/R change the section).
 - **Graphics**: frame rate (60 fps, or the display's maximum with interpolated frames), 3D resolution (auto or 1× to
   4×).
 - **Controls**: on-screen controls hidden with a gamepad or always shown, auto-accelerate (A held in races, B still
@@ -70,7 +83,8 @@ The game is shown on one widescreen picture, without a second screen:
   opacity, vibration.
 - **Game**: unlock everything (every Grand Prix gets a gold trophy with three stars in the save file, which unlocks
   every cup, class, character and kart; applied when the game starts, it restarts for it), export and import of the
-  save file, and a home screen shortcut with the game's own icon (read from your ROM).
+  save file.
+- **Mods**: the mods added, the active one, and Add a mod (see Mods).
 
 The app's icon is an adaptive icon with a monochrome layer: with themed icons on (Android 13+), it takes the colours of
 the wallpaper (Material You).

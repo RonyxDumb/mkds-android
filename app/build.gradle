@@ -11,8 +11,8 @@ android {
         applicationId 'com.mkds.port'
         minSdk 26
         targetSdk 35
-        versionCode 30
-        versionName '0.30'
+        versionCode 31
+        versionName '0.31'
         externalNativeBuild {
             cmake {
                 arguments '-DANDROID_STL=none'
@@ -91,5 +91,7 @@ android {
 }
 
 dependencies {
+    // .xz decompression for xdelta patches (Mods, Vcdiff); public domain
+    implementation 'org.tukaani:xz:1.9'
     questImplementation 'org.khronos.openxr:openxr_loader_for_android:1.1.47'
 }
