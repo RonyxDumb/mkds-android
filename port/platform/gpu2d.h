@@ -31,8 +31,8 @@ void vram_map_build(VramMap *map, const uint8_t vramcnt[10]);
 // Pointer to `offset` in region, or NULL. Offsets within a page are contiguous only up to the page end (16 KiB).
 const uint8_t *vram_ptr(const VramMap *map, const uint8_t *vram, int region, uint32_t offset);
 
-// Widest line: 256 DS columns plus up to 256 more on each side (widescreen, one screen).
-#define GPU2D_MAX_W 768
+// Widest line: 256 DS columns plus up to 384 more on each side (widescreen, one screen).
+#define GPU2D_MAX_W 1024
 
 // Renders both screens (RGBA, 0xAABBGGRR, 192 lines). layer3d: the 3D layer of engine A (256x192, alpha in 0..31 <<
 // 24, colour in RGB888), NULL for none. The output order is top screen, bottom screen (POWCNT1 bit 15 chooses which

@@ -140,10 +140,11 @@ static void upload(GLuint tex, const uint32_t *pixels, int width) {
     }
 }
 
-static void draw_quad_uv(float x, float y, float w, float h, int surface_w, int surface_h, float u0, float u1) {
+static void draw_quad_uvv(float x, float y, float w, float h, int surface_w, int surface_h, float u0, float u1,
+                          float v0, float v1) {
     float x0 = x / surface_w * 2 - 1, x1 = (x + w) / surface_w * 2 - 1;
     float y0 = 1 - y / surface_h * 2, y1 = 1 - (y + h) / surface_h * 2;
-    const float v[] = {x0, y0, u0, 0, x1, y0, u1, 0, x0, y1, u0, 1, x1, y1, u1, 1};
+    const float v[] = {x0, y0, u0, v0, x1, y0, u1, v0, x0, y1, u0, v1, x1, y1, u1, v1};
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0); // client-side arrays
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, v);
@@ -151,6 +152,10 @@ static void draw_quad_uv(float x, float y, float w, float h, int surface_w, int 
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
+static void draw_quad_uv(float x, float y, float w, float h, int surface_w, int surface_h, float u0, float u1) {
+    draw_quad_uvv(x, y, w, h, surface_w, surface_h, u0, u1, 0, 1);
 }
 
 static void draw_quad(int x, int y, int w, int h, int surface_w, int surface_h) {
@@ -213,7 +218,8 @@ enum { ONE_BACK, ONE_TOP, ONE_TOP_BELOW, ONE_BOTTOM, ONE_BOTTOM_BELOW, ONE_MAP, 
 static GLuint s_one_tex[ONE_TEXTURES];
 static bool s_one;           // the last layout asked for one screen
 static int s_one_kind;       // 0 race, 1 menus
-static int s_one_back_w, s_one_back_m; // the background's width and margin (its DS columns start at the left edge)
+static int s_one_back_w, s_one_back_m;
+static float s_one_band[2][3]; // the background's colour above and below the parts // the background's width and margin (its DS columns start at the left edge)
 static bool s_one_top_3d, s_one_bottom_3d;
 static bool s_one_hud;     // races: the touch screen is shown
 static bool s_one_hud_map; // as the map (else as a panel to touch: the results after the goal) // the part is engine A with its 3D layer (compose shader)
@@ -261,13 +267,25 @@ static void one_update(const FrameSnapshot *f, bool race, int canvas_w) {
         return;
     }
     // Background: the top screen's backmost layer and backdrop, its DS columns at the left edge.
-    int m = canvas_w - 256;
+    // Drawn at the parts' scale (draw_one_menu), it must reach the right edge: canvas / scale columns from its left.
+    float part_scale = (canvas_w - 6) / 512.0f;
+    if (part_scale > 1) part_scale = 1;
+    int m = (int) (canvas_w / part_scale) - 256 + 4;
     if (m < 0) m = 0;
     if (256 + 2 * m > GPU2D_MAX_W) m = (GPU2D_MAX_W - 256) / 2;
     int back = gpu2d_back_layer_2d(f, a_top);
     unsigned back_keep = GPU2D_KEEP_BD | (back >= 0 ? GPU2D_KEEP_BG(back) : 0);
     gpu2d_render_part(f, a_top, back_keep, buf, NULL, m);
     upload(s_one_tex[ONE_BACK], buf, 256 + 2 * m);
+    // Above and below it (the parts are smaller than the display's height): its first and last lines' mean colour.
+    for (int e = 0; e < 2; e++) {
+        const uint32_t *line = buf + (e ? 191 : 0) * (256 + 2 * m) + m;
+        uint32_t sum[3] = {0, 0, 0};
+        for (int x = 0; x < 256; x++) {
+            for (int c = 0; c < 3; c++) sum[c] += (line[x] >> (8 * c)) & 0xff;
+        }
+        for (int c = 0; c < 3; c++) s_one_band[e][c] = sum[c] / 256.0f / 255.0f;
+    }
     s_one_back_w = 256 + 2 * m;
     s_one_back_m = m;
     // Each screen without its backmost layer.
@@ -541,19 +559,30 @@ static void draw_one_menu(const int *r, int w, int h, float t) {
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     glDisable(GL_BLEND);
-    // Background: its texture's columns [m, m + canvas).
-    set_plain(0, 1);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, s_one_tex[ONE_BACK]);
-    float u0 = (float) s_one_back_m / s_one_back_w, u1 = (s_one_back_m + canvas) / s_one_back_w;
-    if (u1 > 1) u1 = 1;
-    draw_quad_uv((float) r[0], (float) r[1], (u1 - u0) * s_one_back_w * k, (float) r[3], w, h, u0, u1);
     // The two parts, as large as both fit side by side (with a little room between them).
     float scale = (canvas - 6) / 512.0f;
     if (scale > 1) scale = 1;
     float pw = 256 * scale * k, ph = 192 * scale * k, py = r[1] + (r[3] - ph) / 2;
     float gap = (canvas - 512 * scale) / 3 * k; // left, between, right
     float x_top = r[0] + gap, x_bottom = r[0] + r[2] - pw - gap;
+    // Background: at the top screen's part's place and scale (what the top screen draws over it, such as the title
+    // screen's logo over its picture, stays where it belongs), continued to the edges: the extra columns of its
+    // texture to the right, its first and last lines repeated above and below.
+    set_plain(0, 1);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s_one_tex[ONE_BACK]);
+    float ks = k * scale; // surface pixels per DS pixel of the parts
+    float c0 = s_one_back_m - (x_top - r[0]) / ks, c1 = s_one_back_m + (r[0] + r[2] - x_top) / ks;
+    glEnable(GL_SCISSOR_TEST);
+    for (int e = 0; e < 2; e++) {
+        int y0 = e ? (int) (py + ph) : r[1], y1 = e ? r[1] + r[3] : (int) (py + 0.5f);
+        if (y1 <= y0) continue;
+        glScissor(r[0], h - y1, r[2], y1 - y0);
+        glClearColor(s_one_band[e][0], s_one_band[e][1], s_one_band[e][2], 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+    glDisable(GL_SCISSOR_TEST);
+    draw_quad_uvv((float) r[0], py, (float) r[2], ph, w, h, c0 / s_one_back_w, c1 / s_one_back_w, 0, 1);
     GLuint tex3d = 0;
     if ((s_one_top_3d || s_one_bottom_3d) && s_shown.snap) {
         tex3d = gl3d_render(&s_frames3d[s_cur3d], s_have_prev ? &s_frames3d[s_cur3d ^ 1] : NULL, t, s_shown.snap,
