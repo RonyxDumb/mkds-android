@@ -49,7 +49,9 @@ final class ControlsView extends View {
             mY = new Button(Native.Y, "Y"), mL = new Button(Native.L, "L"), mR = new Button(Native.R, "R"),
             mStart = new Button(Native.START, "START"), mSelect = new Button(Native.SELECT, "SELECT"),
             mNet = new Button(NET, "NET"), mMic = new Button(MIC, "MIC"), mOpt = new Button(OPT, "⚙");
-    private final Button[] mButtons = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mNet, mMic, mOpt};
+    // A and B in the menus of local and online play (their errors ask for A): at the corner of the top screen's part.
+    private final Button mMenuA = new Button(Native.A, "A"), mMenuB = new Button(Native.B, "B");
+    private final Button[] mButtons = {mA, mB, mX, mY, mL, mR, mStart, mSelect, mNet, mMic, mOpt, mMenuA, mMenuB};
     private Runnable mOnNetwork, mOnMic, mOnOptions;
     // From the options screen (OptionsScreen): see applyOptions.
     private boolean mFixedStick = true, mTouchAlways, mAutoAccel, mBigDrift, mHaptics = true;
@@ -70,6 +72,7 @@ final class ControlsView extends View {
     private final SparseArray<Finger> mFingers = new SparseArray<>();
     private final RectF mTouchRect = new RectF(); // the touch screen's part of the picture (from the renderer)
     private final float[] mTouchRectRaw = new float[4];
+    private boolean mNetShown;
     private boolean mRace; // the game shows a race: its buttons and the stick are there
     private final Runnable mWatchRace = new Runnable() {
         @Override
@@ -80,6 +83,11 @@ final class ControlsView extends View {
                 mFingers.clear();
                 mTouchButtons = 0;
                 send();
+                invalidate();
+            }
+            boolean net = Native.isNet();
+            if (net != mNetShown) { // A and B in the menus of local and online play
+                mNetShown = net;
                 invalidate();
             }
             if (mAutoAccel) send(); // A follows races starting and ending
@@ -160,6 +168,8 @@ final class ControlsView extends View {
         place(mOpt, w / 2f + u * 2.6f, u * 0.4f, u * 0.38f);
         place(mNet, w / 2f - u * 2.6f, u * 0.4f, u * 0.38f);
         place(mMic, w / 2f - u * 3.6f, u * 0.4f, u * 0.38f);
+        place(mMenuA, w / 2f - u * 1.1f, h - u * 1.2f, u * 0.75f);
+        place(mMenuB, w / 2f - u * 2.75f, h - u * 0.9f, u * 0.6f);
         place(mStick, u * 2.3f, h - u * 2.3f, u * 1.4f * mSizeScale);
         applyCustomLayout();
         mText.setTextSize(u * 0.42f);
@@ -374,6 +384,7 @@ final class ControlsView extends View {
     // The buttons of the game are hidden with a gamepad (not the screen buttons); NET is hidden during races, MIC
     // without voice chat.
     private boolean hidden(Button b, boolean race) {
+        if (b == mMenuA || b == mMenuB) return race || !Native.isNet() || (mGamepadMode && !mTouchAlways);
         if (b.bits == MIC) return !mVoice;
         if (b.bits == NET) return race;
         if ((b.bits & OWN) != 0 || b.bits == Native.START || b.bits == Native.SELECT) return mGamepadMode && !mTouchAlways

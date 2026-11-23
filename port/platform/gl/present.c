@@ -269,8 +269,9 @@ static void one_update(const FrameSnapshot *f, bool race, int canvas_w) {
 
 void present_set_wide(float aspect) { s_wide = aspect > 4.0f / 3.0f ? aspect / (4.0f / 3.0f) : 1.0f; }
 bool present_is_race(void) { return s_shown.race; }
-static bool s_driving;
+static bool s_driving, s_net;
 bool present_is_driving(void) { return s_driving; }
+bool present_is_net(void) { return s_net; }
 
 void present_init(void) {
     s_prog_plain = program(FS_PLAIN);
@@ -375,6 +376,7 @@ void present_update(const FrameSnapshot *f, int scale) {
         s_have_prev = false;
         s_shown.race = f->scene == 2;
         s_driving = f->driving;
+    s_net = f->net;
         s_shown.scale = scale;
         s_shown.snap = f;
         s_last_number = f->number;
@@ -409,6 +411,7 @@ void present_update(const FrameSnapshot *f, int scale) {
     }
     s_shown.race = f->scene == 2;
     s_driving = f->driving;
+    s_net = f->net;
     s_shown.scale = scale;
     s_shown.snap = f;
     s_last_number = f->number;

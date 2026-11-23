@@ -43,6 +43,12 @@ static void capture(FrameSnapshot *f) {
     f->scene = (uint8_t) GetCurrentSceneNumber();
     extern int port_race_driving(void); // decomp Main/Race/race.c
     f->driving = f->scene == 2 && port_race_driving();
+    extern bool port_wm7_active(void);
+    // Also after the wireless unit stops, until the scene changes (an error shown after the connection ends).
+    static int net_scene = -1;
+    if (port_wm7_active()) net_scene = f->scene;
+    else if (f->scene != net_scene) net_scene = -1;
+    f->net = net_scene >= 0;
     f->time_ns = hapi_now_ns();
     f->number = ++s_number;
 }

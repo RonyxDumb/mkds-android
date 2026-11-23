@@ -51,6 +51,9 @@ final class Native {
     /** Whether the game is showing a race (the layout depends on it). */
     static native boolean isRace();
 
+    /** The wireless unit is on (local or online play): its menus ask for A. */
+    static native boolean isNet();
+
     // Meta Quest build only (port/platform/android/xr.c).
     /** Starts showing the game in the headset (an OpenXR session for the activity). */
     static native void xrStart(android.app.Activity activity);

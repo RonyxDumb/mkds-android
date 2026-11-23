@@ -183,6 +183,13 @@ JNIEXPORT jboolean JNICALL Java_com_mkds_port_Native_isDriving(JNIEnv *env, jcla
     return present_is_driving();
 }
 
+// The wireless unit is on (local or online play): the menus get A and B (errors ask for A).
+JNIEXPORT jboolean JNICALL Java_com_mkds_port_Native_isNet(JNIEnv *env, jclass cls) {
+    (void) env, (void) cls;
+    extern bool present_is_net(void);
+    return present_is_net();
+}
+
 JNIEXPORT jboolean JNICALL Java_com_mkds_port_Native_isRace(JNIEnv *env, jclass cls) {
     (void) env, (void) cls;
     extern bool present_is_race(void);
