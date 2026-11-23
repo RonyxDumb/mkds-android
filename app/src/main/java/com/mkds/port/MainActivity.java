@@ -35,6 +35,34 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     @Override
+    // The console's identity (its wireless address, "<save>.mac", and the Nintendo WFC user ID in its firmware,
+    // "<save>.fw") belongs to this device. Android copies an app's files to a new phone (backup, device transfer):
+    // both phones were then the same console, with the same friend code. On another device (or the first time this
+    // check runs) the identity is made anew; the saves stay.
+    private void bindIdentityToDevice() {
+        String id = android.provider.Settings.Secure.getString(getContentResolver(),
+                android.provider.Settings.Secure.ANDROID_ID);
+        if (id == null) id = "";
+        File marker = new File(getFilesDir(), "device-id");
+        String stored = null;
+        try {
+            stored = new String(java.nio.file.Files.readAllBytes(marker.toPath()), "UTF-8").trim();
+        } catch (Exception ignored) {
+        }
+        if (id.equals(stored)) return;
+        File[] files = getFilesDir().listFiles();
+        if (files != null) {
+            for (File f : files) {
+                String n = f.getName();
+                if (n.endsWith(".sav.mac") || n.endsWith(".sav.fw")) f.delete();
+            }
+        }
+        try {
+            java.nio.file.Files.write(marker.toPath(), id.getBytes("UTF-8"));
+        } catch (Exception ignored) {
+        }
+    }
+
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -42,6 +70,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             getWindow().getAttributes().layoutInDisplayCutoutMode =
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         }
+        bindIdentityToDevice();
         Native.init(getFilesDir().getAbsolutePath());
         File crash = new File(getFilesDir(), "crash.txt");
         if (crash.isFile()) {
