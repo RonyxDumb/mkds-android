@@ -789,6 +789,16 @@ void ComputeLabeledDigest16(u8 *digest, const u8 *label, HttpsState *httpsState)
 }
 
 void ReplaceEntryBytesWithLabeledDigests(HttpsState *httpsState) {
+#ifdef PLATFORM_PORT
+    // The master secret is the three digests one after the other: the DS's compiler placed the three buffers below
+    // next to each other, so that copying 0x30 bytes from the first took all three; here they are one buffer.
+    u8 digests[48];
+    ComputeLabeledDigest16(digests, (const u8 *) "A", httpsState);
+    ComputeLabeledDigest16(digests + 16, (const u8 *) "BB", httpsState);
+    ComputeLabeledDigest16(digests + 32, (const u8 *) "CCC", httpsState);
+    MI_CpuCopy8(digests, httpsState->mEntry->mMasterSecret, sizeof(httpsState->mEntry->mMasterSecret));
+    return;
+#endif
     u8 firstDigest[16];
     u8 secondDigest[16];
     u8 thirdDigest[16];
