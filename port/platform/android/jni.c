@@ -16,6 +16,7 @@
 
 void android_render_set_window(ANativeWindow *window);
 void android_render_set_layout(const int *rects);
+void android_render_set_window2(ANativeWindow *window);
 
 // 32-bit: the DS address space must be reserved before anything else claims the low addresses: do it at load time.
 // arm64: the game runs in its own process (ipc/ipc.h); this only creates the memory shared with it.
@@ -90,6 +91,12 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setSurface(JNIEnv *env, jclass 
     android_render_set_window(surface ? ANativeWindow_fromSurface(env, surface) : NULL);
 }
 
+// A second display (dual-screen devices): the touch screen is drawn on it (render.c).
+JNIEXPORT void JNICALL Java_com_mkds_port_Native_setSecondSurface(JNIEnv *env, jclass cls, jobject surface) {
+    (void) cls;
+    android_render_set_window2(surface ? ANativeWindow_fromSurface(env, surface) : NULL);
+}
+
 JNIEXPORT void JNICALL Java_com_mkds_port_Native_setLayout(JNIEnv *env, jclass cls, jint tx, jint ty, jint tw, jint th,
                                                            jint bx, jint by, jint bw, jint bh) {
     (void) env, (void) cls;
@@ -129,6 +136,14 @@ JNIEXPORT void JNICALL Java_com_mkds_port_Native_setGraphics(JNIEnv *env, jclass
     (void) env, (void) cls;
     extern void android_render_set_options(int max_scale, bool interpolate);
     android_render_set_options(max_scale, interpolate);
+}
+
+// Races: the map's size in percent (0 hidden) and its corner; menus: both screens or the touch screen (gl/present.c).
+JNIEXPORT void JNICALL Java_com_mkds_port_Native_setHud(JNIEnv *env, jclass cls, jint size_percent, jint corner,
+                                                        jint menu_mode) {
+    (void) env, (void) cls;
+    extern void present_set_hud(int size_percent, int corner, int menu_mode);
+    present_set_hud(size_percent, corner, menu_mode);
 }
 
 // One screen: where the touch screen's part of the picture is (surface pixels x, y, w, h; w 0 when there is none).

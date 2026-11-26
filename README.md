@@ -76,11 +76,14 @@ The game fills the display, without empty bars:
 **⚙** opens the options over the paused game: sections on the left, their settings on the right (touch, or a gamepad:
 L/R change the section).
 - **Graphics**: frame rate (60 fps, or the display's maximum with interpolated frames), 3D resolution (auto or 1× to
-  4×).
+  4×), menus with both screens or the touch screen alone, the race map (with the ranking and time over it) small,
+  medium, large or hidden and in any corner, and on devices with two displays the touch screen on the second one.
 - **Controls**: on-screen controls hidden with a gamepad or always shown, auto-accelerate (A held in races, B still
   brakes, only while you drive: not in the title screen's demos nor during the countdown), the drift button above A or
   large and apart, button size and opacity, vibration, the stick fixed or floating, and **Edit layout**: drag the buttons (and the fixed stick) where you want them, pinch
-  (or − / +) to resize, Save keeps the layout, Reset brings back the original one.
+  (or − / +) to resize, Save keeps the layout, Reset brings back the original one. **Buttons in menus**: none, L and R,
+  or every button and the stick, outside races too (for mods whose menus use them). **Map gamepad buttons**: choose
+  the gamepad's button for each DS button.
 - **Game**: unlock everything (every Grand Prix gets a gold trophy with three stars in the save file, which unlocks
   every cup, class, character and kart; applied when the game starts, it restarts for it), export and import of the
   save file.
@@ -88,6 +91,10 @@ L/R change the section).
 
 The app's icon is an adaptive icon with a monochrome layer: with themed icons on (Android 13+), it takes the colours of
 the wallpaper (Material You).
+
+## Two displays
+On devices with a second display (dual-screen handhelds), the top screen fills the first display and the touch
+screen is shown, and touched, on the second one, as on a DS. **⚙ → Graphics → Second display** turns it off.
 
 ## Local multiplayer
 1. Connect both phones to the same Wi-Fi network (a hotspot from one of them works too).

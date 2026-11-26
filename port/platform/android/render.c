@@ -17,6 +17,9 @@ static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t s_cond = PTHREAD_COND_INITIALIZER;
 static ANativeWindow *s_window; // requested window
 static bool s_window_changed;
+// A second display (dual-screen devices, issue #22): the touch screen is drawn there, the top screen on the first.
+static ANativeWindow *s_window2;
+static bool s_window2_changed;
 static int s_layout[8] = {0, 0, 256, 192, 256, 0, 256, 192};
 static pthread_t s_thread;
 static bool s_thread_running;
@@ -41,7 +44,8 @@ static void *render_thread(void *arg) {
     const EGLint ctx_attr[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
     EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctx_attr);
     EGLSurface surf = EGL_NO_SURFACE;
-    ANativeWindow *window = NULL;
+    ANativeWindow *window = NULL, *window2 = NULL;
+    EGLSurface surf2 = EGL_NO_SURFACE;
     bool gl_ready = false;
     uint64_t snap_time = 0, last_swap = 0;
     double swap_interval = 1.0 / 60; // measured display period (smoothed)
@@ -72,6 +76,27 @@ static void *render_thread(void *arg) {
                     gl_ready = true;
                     present_init();
                 }
+            }
+        }
+        if (s_window2_changed && window) {
+            s_window2_changed = false;
+            if (surf2 != EGL_NO_SURFACE) {
+                eglMakeCurrent(dpy, surf, surf, ctx);
+                eglDestroySurface(dpy, surf2);
+                surf2 = EGL_NO_SURFACE;
+            }
+            if (window2) ANativeWindow_release(window2);
+            window2 = s_window2;
+            if (window2) {
+                ANativeWindow_acquire(window2);
+                surf2 = eglCreateWindowSurface(dpy, cfg, window2, NULL);
+                if (surf2 != EGL_NO_SURFACE && eglMakeCurrent(dpy, surf2, surf2, ctx)) {
+                    eglSwapInterval(dpy, 0); // the first display sets the pace
+                } else if (surf2 != EGL_NO_SURFACE) {
+                    eglDestroySurface(dpy, surf2);
+                    surf2 = EGL_NO_SURFACE;
+                }
+                eglMakeCurrent(dpy, surf, surf, ctx);
             }
         }
         bool have_window = window != NULL;
@@ -105,6 +130,13 @@ static void *render_thread(void *arg) {
             if (t < 0) t = 0;
             if (t > 1) t = 1;
         }
+        if (surf2 != EGL_NO_SURFACE && eglMakeCurrent(dpy, surf2, surf2, ctx)) {
+            int w2 = ANativeWindow_getWidth(window2), h2 = ANativeWindow_getHeight(window2);
+            int bottom[8] = {0, 0, 0, 0, 0, 0, w2, h2};
+            present_draw(bottom, w2, h2, t);
+            eglSwapBuffers(dpy, surf2);
+            eglMakeCurrent(dpy, surf, surf, ctx);
+        }
         present_draw(layout, w, h, t);
         eglSwapBuffers(dpy, surf);
         clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -135,6 +167,23 @@ void android_render_set_window(ANativeWindow *window) {
     while (!window) {
         pthread_mutex_lock(&s_lock);
         bool pending = s_window_changed;
+        pthread_mutex_unlock(&s_lock);
+        if (!pending) break;
+        usleep(1000);
+    }
+}
+
+// The second display's surface (NULL: none). Like the first, not used after this returns with NULL.
+void android_render_set_window2(ANativeWindow *window) {
+    pthread_mutex_lock(&s_lock);
+    if (s_window2) ANativeWindow_release(s_window2);
+    s_window2 = window;
+    s_window2_changed = true;
+    pthread_cond_signal(&s_cond);
+    pthread_mutex_unlock(&s_lock);
+    while (!window) {
+        pthread_mutex_lock(&s_lock);
+        bool pending = s_window2_changed && s_window && s_thread_running;
         pthread_mutex_unlock(&s_lock);
         if (!pending) break;
         usleep(1000);

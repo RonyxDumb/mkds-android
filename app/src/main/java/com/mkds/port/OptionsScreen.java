@@ -47,6 +47,7 @@ final class OptionsScreen {
         void onModChosen();
         void editLayout();
         void shareLog();
+        void remapGamepad();
     }
 
     static final String PREFS = "mkds";
@@ -81,6 +82,21 @@ final class OptionsScreen {
     static boolean haptics(android.content.Context c) { return prefs(c).getBoolean("haptics", true); }
 
     static boolean unlockAll(android.content.Context c) { return prefs(c).getBoolean("unlock_all", false); }
+
+    /** Outside races: 0 no game buttons (the menus are touched), 1 L and R only, 2 every button and the stick. */
+    static int menuButtons(android.content.Context c) { return prefs(c).getInt("menu_buttons", 0); }
+
+    /** Dual-screen devices: the touch screen on the second display (read at the game's start). */
+    static boolean secondDisplay(android.content.Context c) { return prefs(c).getBoolean("second_display", true); }
+
+    /** Menus: 0 both screens side by side, 1 the touch screen alone. */
+    static int menuScreens(android.content.Context c) { return prefs(c).getInt("menu_screens", 0); }
+
+    /** Races: the map's size in percent of the usual one (0 hidden). */
+    static int hudSize(android.content.Context c) { return prefs(c).getInt("hud_size", 100); }
+
+    /** Races: the map's corner: 0 lower right, 1 lower left, 2 upper right, 3 upper left. */
+    static int hudCorner(android.content.Context c) { return prefs(c).getInt("hud_corner", 0); }
 
     // ---------------------------------------------------------------------------------------- look
     private static final int NAVY = 0xff0a1a44, BLUE = 0xff1747b8, BLUE_LIGHT = 0xff2f6fe8;
@@ -204,10 +220,19 @@ final class OptionsScreen {
         int code = e.getKeyCode();
         boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
         switch (code) {
+            case KeyEvent.KEYCODE_DPAD_UP:
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                if (down) navigate(code);
+                return true;
             case KeyEvent.KEYCODE_BUTTON_A:
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
                 if (down) {
                     View f = mRoot.findFocus();
-                    if (f != null) f.performClick();
+                    if (f == null) focusFirst();
+                    else f.performClick();
                 }
                 return true;
             case KeyEvent.KEYCODE_BUTTON_L1:
@@ -223,6 +248,47 @@ final class OptionsScreen {
             default:
                 return false; // D-pad: focus navigation
         }
+    }
+
+    // Focus moves here rather than through the window's own navigation: opened with a touch, the window is in touch
+    // mode and nothing takes the focus there (a gamepad could not move nor choose anything, issue #12); the stick and
+    // a D-pad sent as axes (most gamepads) come here as D-pad keys too (MainActivity).
+    void navigate(int keyCode) {
+        View f = mRoot.findFocus();
+        if (f == null) {
+            focusFirst();
+            return;
+        }
+        // A control that takes left / right itself (the segmented choices) first.
+        if (f.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, keyCode))) {
+            f.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, keyCode));
+            return;
+        }
+        int dir = keyCode == KeyEvent.KEYCODE_DPAD_UP ? View.FOCUS_UP : keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                ? View.FOCUS_DOWN : keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? View.FOCUS_LEFT : View.FOCUS_RIGHT;
+        View next = f.focusSearch(dir);
+        if (next == null && dir == View.FOCUS_RIGHT && isTab(f) && mContent.getChildCount() > 0) {
+            next = mContent.focusSearch(View.FOCUS_DOWN); // from the sections into the settings
+        }
+        if (next != null && isInside(next)) next.requestFocusFromTouch();
+    }
+
+    private void focusFirst() {
+        mTabs[mSection].requestFocusFromTouch();
+    }
+
+    private boolean isTab(View v) {
+        for (TextView t : mTabs) {
+            if (t == v) return true;
+        }
+        return false;
+    }
+
+    private boolean isInside(View v) {
+        for (android.view.ViewParent p = v.getParent(); p != null; p = p.getParent()) {
+            if (p == mRoot) return true;
+        }
+        return false;
     }
 
     // ---------------------------------------------------------------------------------------- sections
@@ -251,8 +317,24 @@ final class OptionsScreen {
         int[] scales = {0, 1, 2, 3, 4};
         segmented(g, "3D resolution", new String[] {"Auto", "1×", "2×", "3×", "4×"},
                 indexOf(scales, maxScale(mActivity)), i -> putInt("max_scale", scales[i]));
+        segmented(g, "Menus", new String[] {"Both screens", "Touch screen"}, menuScreens(mActivity),
+                i -> putInt("menu_screens", i));
+        if (DualScreen.secondDisplay(mActivity) != null) {
+            toggle(g, "Second display", "The touch screen on the second display (restarts the game)",
+                    secondDisplay(mActivity), v -> {
+                        put("second_display", v);
+                        mHost.restartGame();
+                    });
+        }
+        LinearLayout hud = group("Race map");
+        int[] hudSizes = {0, 70, 100, 130};
+        segmented(hud, "Map and ranking", new String[] {"Hidden", "S", "M", "L"},
+                indexOf(hudSizes, hudSize(mActivity)), i -> putInt("hud_size", hudSizes[i]));
+        segmented(hud, "Corner", new String[] {"↘", "↙", "↗", "↖"}, hudCorner(mActivity),
+                i -> putInt("hud_corner", i));
         footnote("Display max draws extra frames between the game's own on 90, 120 and 144 Hz displays. 60 fps and a "
-                + "lower 3D resolution save battery.");
+                + "lower 3D resolution save battery. The race map shows the ranking and the time over it; hidden, the "
+                + "pause menu is chosen with the stick and A.");
     }
 
     private void buildControls() {
@@ -274,7 +356,12 @@ final class OptionsScreen {
         segmented(look, "Opacity", new String[] {"Low", "Medium", "High"},
                 indexOf(opacities, buttonOpacityPercent(mActivity)), i -> putInt("button_opacity", opacities[i]));
         toggle(look, "Vibration", null, haptics(mActivity), v -> put("haptics", v));
-        footnote("With auto-accelerate, one thumb steers with the stick and the other drifts with R.");
+        segmented(look, "Buttons in menus", new String[] {"None", "L / R", "All"}, menuButtons(mActivity),
+                i -> putInt("menu_buttons", i));
+        LinearLayout pad = group("Gamepad");
+        action(pad, "Map gamepad buttons", "Choose which gamepad button is each DS button", mHost::remapGamepad);
+        footnote("With auto-accelerate, one thumb steers with the stick and the other drifts with R. Buttons in menus: "
+                + "for mods whose menus use L and R (or the stick and A), shown outside races too.");
     }
 
     private void buildGame() {

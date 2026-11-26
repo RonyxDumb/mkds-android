@@ -55,6 +55,7 @@ final class ControlsView extends View {
     private Runnable mOnNetwork, mOnMic, mOnOptions;
     // From the options screen (OptionsScreen): see applyOptions.
     private boolean mFixedStick = true, mTouchAlways, mAutoAccel, mBigDrift, mHaptics = true;
+    private int mMenuButtons; // outside races: 0 none, 1 L and R, 2 every game button and the stick
     private float mSizeScale = 1f, mOpacity = 1f;
     private long mAReleaseUntil; // auto-accelerate: A let go briefly when the A button is touched (a fresh press)
     private boolean mOnline, mVoice, mMicOn;
@@ -101,6 +102,22 @@ final class ControlsView extends View {
     private int mTouchButtons, mPadButtons, mStickButtons;
     private boolean mTouching;
     private int mTouchX, mTouchY;
+    // Dual-screen devices (DualScreen): the top screen alone here, the touch screen touched on the second display.
+    private boolean mDual, mExtTouching;
+    private int mExtX, mExtY;
+
+    void setDual(boolean dual) {
+        mDual = dual;
+        if (mWidth > 0) layoutScreens(mWidth, mHeight);
+    }
+
+    /** A touch on the second display's touch screen (DS pixels). */
+    void setExternalTouch(boolean touching, int x, int y) {
+        mExtTouching = touching;
+        mExtX = x;
+        mExtY = y;
+        send();
+    }
 
     ControlsView(Context context) {
         super(context);
@@ -120,6 +137,7 @@ final class ControlsView extends View {
         mBigDrift = OptionsScreen.bigDrift(c);
         mFixedStick = OptionsScreen.fixedStick(c);
         mHaptics = OptionsScreen.haptics(c);
+        mMenuButtons = OptionsScreen.menuButtons(c);
         mSizeScale = OptionsScreen.buttonSizePercent(c) / 100f;
         mOpacity = OptionsScreen.buttonOpacityPercent(c) / 100f;
     }
@@ -141,7 +159,8 @@ final class ControlsView extends View {
         mHeight = h;
         float u = mUnit = Math.min(h / 8f, w / 15f);
         Native.setWideAspect((float) w / h);
-        Native.setLayout(0, 0, w, h, 0, 0, w, h); // the same rectangle twice: one screen
+        if (mDual) Native.setLayout(0, 0, w, h, 0, 0, 0, 0); // the top screen only: the other is on the second display
+        else Native.setLayout(0, 0, w, h, 0, 0, w, h); // the same rectangle twice: one screen
 
         float b = u * mSizeScale; // the game's buttons, at the chosen size
         if (mBigDrift) {
@@ -389,7 +408,15 @@ final class ControlsView extends View {
         if (b.bits == NET) return race;
         if ((b.bits & OWN) != 0 || b.bits == Native.START || b.bits == Native.SELECT) return mGamepadMode && !mTouchAlways
                 && b.bits != OPT;
-        return !race || (mGamepadMode && !mTouchAlways); // the game's buttons: in races
+        if (mGamepadMode && !mTouchAlways) return true;
+        if (race) return false; // the game's buttons: in races
+        // In menus, if chosen (mods whose menus use L and R, issues #16 and #18).
+        return mMenuButtons == 0 || (mMenuButtons == 1 && b != mL && b != mR);
+    }
+
+    // The stick is used and shown: in races, and in menus when every button is shown there.
+    private boolean stickOn(boolean race) {
+        return race || mMenuButtons == 2;
     }
 
     boolean isGamepadMode() {
@@ -433,7 +460,8 @@ final class ControlsView extends View {
             if (android.os.SystemClock.uptimeMillis() >= mAReleaseUntil) buttons |= Native.A;
             else buttons &= ~Native.A;
         }
-        Native.setInput(buttons, mTouching, mTouchX, mTouchY);
+        if (mExtTouching && !mTouching) Native.setInput(buttons, true, mExtX, mExtY);
+        else Native.setInput(buttons, mTouching, mTouchX, mTouchY);
     }
 
     // Buttons under a point: slightly larger than drawn, so that a thumb between A and R holds both.
@@ -478,7 +506,7 @@ final class ControlsView extends View {
                 }
             } else if (touchRect() && mTouchRect.contains(x, y)) {
                 f.role = ROLE_STYLUS;
-            } else if (!Native.isRace()) {
+            } else if (!stickOn(Native.isRace())) {
                 f.role = ROLE_NONE; // outside the touch screen's part, in menus
             } else if (mGamepadMode) {
                 // The screen touched outside the touch screen with the gamepad's controls on: the on-screen controls
@@ -490,8 +518,8 @@ final class ControlsView extends View {
             } else {
                 f.role = ROLE_BUTTONS;
             }
-            if (mFixedStick && f.role != ROLE_STYLUS && f.role != ROLE_NONE && (bits & ~OWN) == 0 && Native.isRace()
-                    && Math.hypot(x - mStick.x, y - mStick.y) <= mStick.r * 1.8f) {
+            if (mFixedStick && f.role != ROLE_STYLUS && f.role != ROLE_NONE && (bits & ~OWN) == 0
+                    && stickOn(Native.isRace()) && Math.hypot(x - mStick.x, y - mStick.y) <= mStick.r * 1.8f) {
                 f.role = ROLE_STICK; // on the stick (wherever it was placed)
             }
             if (f.role == ROLE_STICK && mFixedStick) { // the base stays where it is
@@ -553,6 +581,7 @@ final class ControlsView extends View {
 
     // Where the renderer put the touch screen's part: false when there is none (races).
     private boolean touchRect() {
+        if (mDual) return false; // touched on the second display
         Native.touchRect(mTouchRectRaw);
         mTouchRect.set(mTouchRectRaw[0], mTouchRectRaw[1], mTouchRectRaw[0] + mTouchRectRaw[2],
                 mTouchRectRaw[1] + mTouchRectRaw[3]);
@@ -603,7 +632,7 @@ final class ControlsView extends View {
             mText.setTextSize(size);
         }
         if (mFixedStick) {
-            if (race && (!mGamepadMode || mTouchAlways)) drawFixedStick(c);
+            if (stickOn(race) && (!mGamepadMode || mTouchAlways)) drawFixedStick(c);
             return;
         }
         // The stick under the thumb.
@@ -616,7 +645,7 @@ final class ControlsView extends View {
             mFill.setColor(0x70ffffff);
             c.drawCircle(f.x, f.y, mUnit * 0.5f, mFill);
         }
-        if (race && (!mGamepadMode || mTouchAlways) && (mFingers.size() == 0 || !hasStick())) {
+        if (stickOn(race) && (!mGamepadMode || mTouchAlways) && (mFingers.size() == 0 || !hasStick())) {
             // Where the stick goes.
             mRing.setAlpha(0x30);
             c.drawCircle(mUnit * 2.2f, mHeight - mUnit * 2.2f, mUnit * 1.2f, mRing);

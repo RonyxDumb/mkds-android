@@ -19,5 +19,8 @@ bool present_engine_a_on_top(void);
 // One screen (the layout's two rectangles the same): where the touch screen's part is, surface pixels (x, y, w, h;
 // w = 0: nothing to touch).
 void present_one_touch_rect(float *out);
+// Races: the map's size in percent (0 hidden) and its corner (0 lower right, 1 lower left, 2 upper right, 3 upper left).
+// Menus: 0 both screens side by side, 1 the touch screen alone.
+void present_set_hud(int size_percent, int corner, int menu_mode);
 // The screens drawn as the layout says (no one-screen composition).
 void present_draw_screens(const int layout[8], int w, int h, float t);
