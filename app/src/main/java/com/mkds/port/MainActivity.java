@@ -91,6 +91,36 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
+    /** The game could not start: the reason, the device, the crash report (if any) and the end of the log, which
+     * can be copied for a bug report (log.txt is in the app's private storage, out of the player's reach). */
+    private void showStartError(String err) {
+        StringBuilder text = new StringBuilder(err).append("\n\n").append("Mario Kart DS ")
+                .append(BuildConfig.VERSION_NAME).append(", Android ").append(android.os.Build.VERSION.RELEASE)
+                .append(", ").append(android.os.Build.MANUFACTURER).append(' ').append(android.os.Build.MODEL)
+                .append(", ").append(android.text.TextUtils.join("/", android.os.Build.SUPPORTED_ABIS)).append('\n');
+        for (String name : new String[] {"crash.txt", "log.txt"}) {
+            File f = new File(getFilesDir(), name);
+            if (!f.isFile()) continue;
+            try {
+                byte[] all = java.nio.file.Files.readAllBytes(f.toPath());
+                int from = Math.max(0, all.length - 6000);
+                text.append('\n').append(name).append(":\n").append(new String(all, from, all.length - from, "UTF-8"));
+            } catch (Exception ignored) {
+            }
+        }
+        new File(getFilesDir(), "crash.txt").delete(); // shown here, not again at the next start
+        final String report = text.toString();
+        new AlertDialog.Builder(this).setTitle("The game could not start").setMessage(report)
+                .setPositiveButton("Copy report", (d, w) -> {
+                    android.content.ClipboardManager cm =
+                            (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("mkds start error", report));
+                    toast("Copied: paste it in a bug report");
+                    finish();
+                })
+                .setNegativeButton("Quit", (d, w) -> finish()).setCancelable(false).show();
+    }
+
     /** The report of the last crash, with the log before it: shown once, with a button to copy it. */
     private void showCrashReport(File crash) {
         StringBuilder text = new StringBuilder();
@@ -267,8 +297,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             mOnline.applyVolume();
             String err = Native.start(mGameRom.getAbsolutePath(), saveFile().getAbsolutePath());
             if (err != null) {
-                new AlertDialog.Builder(this).setTitle("Mario Kart DS").setMessage(err)
-                        .setPositiveButton("Quit", (d, w) -> finish()).setCancelable(false).show();
+                showStartError(err);
                 return;
             }
             sStarted = true;
