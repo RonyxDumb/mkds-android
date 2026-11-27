@@ -521,6 +521,21 @@ static inline void InitMap2D_inline(u16 *screenMap) {
     }
 }
 
+#ifdef PLATFORM_PORT
+// The unused courses have no second global map palette and graphics: the first ones are used again (loading a file
+// twice would undo its first loading).
+#define Map2DGlobal2File(kind) FindCourseFileWrapper("Map2D/global2." kind)
+#define LoadMap2DGlobal2(load, out, kind, first)                                                                       \
+    do {                                                                                                               \
+        void *file_ = Map2DGlobal2File(kind);                                                                          \
+        if (file_ != NULL) load(out, file_);                                                                           \
+        else *(out) = (first);                                                                                         \
+    } while (0)
+#else
+#define Map2DGlobal2File(kind) FindCourseFileWrapper("Map2D/global2." kind)
+#define LoadMap2DGlobal2(load, out, kind, first) load(out, Map2DGlobal2File(kind))
+#endif
+
 void InitMap2D(void) {
     Nclr *nclrs[3];
     Ncgr *ncgrs[3];
@@ -548,7 +563,7 @@ void InitMap2D(void) {
     if (ShouldLoadMap2DData()) {
         if (hasGlobalFiles) {
             LoadNclrData(&nclrs[0], FindCourseFileWrapper("Map2D/global.NCLR"));
-            LoadNclrData(&nclrs[1], FindCourseFileWrapper("Map2D/global2.NCLR"));
+            LoadMap2DGlobal2(LoadNclrData, &nclrs[1], "NCLR", nclrs[0]);
         }
         LoadNclrData(&nclrs[2], FindCourseFileWrapper("Map2D/local.NCLR"));
     } else {
@@ -562,13 +577,13 @@ void InitMap2D(void) {
     if (ShouldLoadMap2DData()) {
         if (hasGlobalFiles) {
             LoadNcgrData(&ncgrs[0], FindCourseFileWrapper("Map2D/global.NCGR"));
-            LoadNcgrData(&ncgrs[1], FindCourseFileWrapper("Map2D/global2.NCGR"));
+            LoadMap2DGlobal2(LoadNcgrData, &ncgrs[1], "NCGR", ncgrs[0]);
         }
         LoadNcgrData(&ncgrs[2], FindCourseFileWrapper("Map2D/local.NCGR"));
     } else {
         if (hasGlobalFiles) {
             LocateNcgr(&ncgrs[0], FindCourseFileWrapper("Map2D/global.NCGR"));
-            LocateNcgr(&ncgrs[1], FindCourseFileWrapper("Map2D/global2.NCGR"));
+            LoadMap2DGlobal2(LocateNcgr, &ncgrs[1], "NCGR", ncgrs[0]);
         }
         LocateNcgr(&ncgrs[2], FindCourseFileWrapper("Map2D/local.NCGR"));
     }

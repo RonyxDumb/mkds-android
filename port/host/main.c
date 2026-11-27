@@ -236,6 +236,8 @@ int main(int argc, char **argv) {
     }
     extern int g_wm7_trace __attribute__((weak));
     if (&g_wm7_trace && getenv("MKDS_WMTRACE")) g_wm7_trace = 1;
+    extern int g_port_course;
+    if (getenv("MKDS_COURSE")) g_port_course = atoi(getenv("MKDS_COURSE"));
     extern int g_ds_trace __attribute__((weak));
     if (&g_ds_trace && getenv("MKDS_DSTRACE")) g_ds_trace = 1;
     // MKDS_ONE: as the phone app, one screen (the game told through its options, see port_option).

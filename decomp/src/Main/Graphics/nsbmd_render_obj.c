@@ -274,7 +274,12 @@ NNSG3dResMdl *InitNsbmdWithTextureInfoCopy(void *heap, Nsbmd *nsbmd, NNSG3dResFi
     NNSG3dResMdl *resMdl;
 
     modelSet = NNS_G3dGetMdlSet(modelFile);
+#ifdef PLATFORM_PORT
+    // The unused courses keep their textures in the model file (no course_model.nsbtx).
+    texture = NNS_G3dGetTex(textureFile != NULL ? textureFile : modelFile);
+#else
     texture = NNS_G3dGetTex(textureFile);
+#endif
     nsbmd->mResFileEntry.mTexture = NULL;
     nsbmd->mResFileEntry.mFile = NULL;
     NNS_FndAppendListObject(&gResFileEntries, &nsbmd->mResFileEntry);

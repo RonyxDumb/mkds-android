@@ -368,6 +368,12 @@ void LoadArchiveSlotForScene(int slotIndex, int sceneNumber) {
     switch (slotIndex) {
         case ARCHIVE_SLOT_COURSE:
         case ARCHIVE_SLOT_COURSE_TEXTURE:
+#ifdef PLATFORM_PORT
+            {
+                extern int g_port_course; // tests: MKDS_COURSE
+                if (g_port_course > 0) gRaceSetup->mCourseId = g_port_course;
+            }
+#endif
             BuildCourseArchivePath(path, gRaceSetup->mCourseId, slotIndex != ARCHIVE_SLOT_COURSE);
             break;
         case ARCHIVE_SLOT_SCENE:

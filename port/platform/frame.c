@@ -22,6 +22,7 @@ void *g_lockstep_ready, *g_lockstep_done;
 static FrameSnapshot s_buffers[3];
 static int s_write = 0, s_read = 2;
 static _Atomic int s_ready = 1;
+int g_port_course; // tests: a course to race instead of the chosen one (decomp menu.c)
 static atomic_bool s_fresh;
 static uint64_t s_number;
 
