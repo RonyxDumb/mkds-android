@@ -198,6 +198,15 @@ void InitResultsGp(void *heap, void *firstOamList, void *secondOamList) {
     for (courseIndex = 0; courseIndex < 4; courseIndex++) {
         message = GetBmgEntry(gResultsGp->mCommonMessages,
                               GetCourseMessageIndex(gResultsGpCupCourseIds[gResultsGp->mCupIndex][courseIndex]));
+#ifdef PLATFORM_PORT
+        {
+            extern int gPortExtraCup;
+            const u16 *PortExtraCourseName(s32 extraCup, s32 courseIndex);
+            if (gPortExtraCup && gResultsGp->mCupIndex == 3 + gPortExtraCup) {
+                message = (void *) PortExtraCourseName(gPortExtraCup, courseIndex);
+            }
+        }
+#endif
         PrintLabelLayoutTextNoFixedAdvance(1, gResultsGpSubLabelCanvasEntries[labelTableIndex].mLabelIndex,
                                            subFileSet->mLabelLayout, message, subFileSet->mCellLayout,
                                            subFileSet->mCellTable);

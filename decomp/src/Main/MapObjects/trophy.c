@@ -194,6 +194,9 @@ void InitTrophy(s32 modelIndex, u16 rankIndex) {
         }
         modelAnimation = &gTrophy->mModelAnimation;
         modelAnimation->mHead.mFrameIndex = frameIndex;
+#ifdef PLATFORM_PORT
+        if (modelAnimation->mAnmObjs[modelAnimation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
         modelAnimation->mAnmObjs[modelAnimation->mCurrentIndex]->mFrame = modelAnimation->mHead.mFrameIndex;
         InitEffects(GetHeap(GetCurrentHeapCall()));
         if (rankIndex == 0) {

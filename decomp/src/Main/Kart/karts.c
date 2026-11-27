@@ -2050,6 +2050,9 @@ void AdvanceKartModelMenuLoad(void) {
                 if (loadSlot->mCharacterIndex == shownSlot->mCharacterIndex) {
                     animation = loadSlot->mCharacterAnimation;
                     animation->mHead.mFrameIndex = shownSlot->mCharacterAnimation->mHead.mFrameIndex;
+#ifdef PLATFORM_PORT
+                    if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
                     animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
                 }
             }

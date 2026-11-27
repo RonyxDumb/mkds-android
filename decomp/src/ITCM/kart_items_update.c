@@ -76,7 +76,12 @@ void UpdateKartItems(KartItems *kartItems) {
             SetHeldItem(heldItem, slotResult);
         }
     }
+#ifdef PLATFORM_PORT
+    if (kartItems->mKartIndex == GetRaceUpdateFramesMod8() && (itemLink = &kartItems->mItemLink)->mLink != NULL &&
+        itemLink->mLink->mPointPos != NULL) { // (the unused courses have item route points without a position)
+#else
     if (kartItems->mKartIndex == GetRaceUpdateFramesMod8() && (itemLink = &kartItems->mItemLink)->mLink != NULL) {
+#endif
         kart = kartItems->mKart;
         drawMatrixPos = &kart->mDrawMatrixPos;
         PickNearestNearbyItemPointLink(itemLink, itemLink, drawMatrixPos);

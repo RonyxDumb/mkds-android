@@ -244,6 +244,9 @@ void StartHanachanFollowerMoveState(MissionRunMapObject *mapObject) {
     }
     modelAnimation = mapObject->mNsbmd->mAnimations[0];
     modelAnimation->mHead.mFrameIndex = frameIndexValue;
+#ifdef PLATFORM_PORT
+    if (modelAnimation->mAnmObjs[modelAnimation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
     modelAnimation->mAnmObjs[modelAnimation->mCurrentIndex]->mFrame = modelAnimation->mHead.mFrameIndex;
 }
 

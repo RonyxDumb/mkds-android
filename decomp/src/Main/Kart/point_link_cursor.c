@@ -263,6 +263,12 @@ void ResetRaceKartAiAtPointLink(KartAi *kartAi) {
     extern void *g_port_ai_reset_link;
     RacePointLink *pointLink = (RacePointLink *) g_port_ai_reset_link;
 
+    // The unused courses can have a respawn point with no route point (or one with nothing before it): the
+    // cursor then stays where it was.
+    if (pointLink == NULL || pointLink->mPreviousLinks[0] == NULL) {
+        ResetKartAi(kartAi, 1);
+        return;
+    }
     ResetPointLinkCursor(&kartAi->mPointLinkCursor, pointLink);
     ResetKartAi(kartAi, 1);
 }

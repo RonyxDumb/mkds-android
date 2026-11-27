@@ -93,6 +93,63 @@ const s16 gSelectCupGridDownOffsets[8] = {4, 4, 4, 4, 0, 0, 0, 0};
 const s16 gSelectCupGridLeftOffsets[8] = {0, -1, -1, -1, 0, -1, -1, -1};
 SelectCupGrid *gSelectCupGrid;
 
+#ifdef PLATFORM_PORT
+// The port's extra page (R on the cup screen, Grand Prix and VS): the Retro row becomes the extra row, whose first cup
+// is the extra cup (gPortExtraCupCourseIds, oam.c). It keeps no records.
+extern int gPortExtraPage, gPortExtraCup;
+const u16 *PortExtraCourseName(s32 extraCup, s32 courseIndex);
+// The extra cup shown (1 or 2: the cups at 4 and 5 on the extra page), or 0.
+static s32 PortShowsExtraCup(void) {
+    return gPortExtraPage && (gSelectCupGrid->mIndex == 4 || gSelectCupGrid->mIndex == 5) ? gSelectCupGrid->mIndex - 3
+                                                                                           : 0;
+}
+// Grand Prix (SHOW_RECORDS) and VS on this console (NO_CONNECTION); not Time Trial (NO_RECORDS: its records are per
+// course) nor multiplayer.
+static BOOL PortExtraPageAllowedFor(s32 mode) {
+    return gBootInfo->mBootType != BOOT_TYPE_MULTIBOOT &&
+           (mode == SELECT_CUP_GRID_MODE_SHOW_RECORDS || mode == SELECT_CUP_GRID_MODE_NO_CONNECTION);
+}
+static BOOL PortExtraPageAllowed(void) { return PortExtraPageAllowedFor(gSelectCupGrid->mMode); }
+void UpdateSelectCupGridCupCells(void);
+// The extra cups' icons: the Shell and Banana Cups' in other colors (a red shell, a cyan banana) on the extra page.
+static void PortTintExtraCupIcons(void) {
+    static u16 saved[2][16];
+    static u16 *tinted[2];
+    s32 cup, i;
+    for (cup = 0; cup < 2; cup++) { // back to the colors they had
+        if (tinted[cup] != NULL) {
+            for (i = 0; i < 16; i++) tinted[cup][i] = saved[cup][i];
+            tinted[cup] = NULL;
+        }
+    }
+    if (!gPortExtraPage) return;
+    for (cup = 0; cup < 2; cup++) {
+        u16 cell = gSelectCupGridCupCellIndices[4 + cup][4];
+        u16 *palette = (u16 *) 0x05000600 +
+                       GetCellPaletteIndex(cell, gSelectCupGrid->mSelectCupSNcer, gSelectCupGrid->mSelectCupSBncl) * 16;
+        if (cup == 1 && palette == tinted[0]) break; // the same palette
+        for (i = 0; i < 16; i++) {
+            u16 c = palette[i];
+            saved[cup][i] = c;
+            u16 r = c & 0x1f, g = (c >> 5) & 0x1f, b = (c >> 10) & 0x1f;
+            if (cup == 0) palette[i] = (u16) ((c & 0x8000) | (b << 10) | (r << 5) | g); // red and green swapped
+            else palette[i] = (u16) ((c & 0x8000) | (g << 10) | (r << 5) | b);          // a yellow banana turns cyan
+        }
+        tinted[cup] = palette;
+    }
+}
+static void PortToggleExtraPage(void) {
+    gPortExtraPage = !gPortExtraPage;
+    PortTintExtraCupIcons();
+    RefreshSelectCupGridCupsEnabled();
+    if (gSelectCupGrid->mIndex >= 4) gSelectCupGrid->mIndex = 4;
+    gSelectCupGrid->mShownIndex = -1; // shown again: names, records, picture
+    ResetSelectCupGridShownCourse();
+    UpdateSelectCupGridCupCells();
+    NNS_SndArcPlayerStartSeqArc(&gSharedSeqHandle, 0, 0);
+}
+#endif
+
 void RefreshSelectCupGridCupsEnabled(void) {
     int cupIndex;
     u32 enabled;
@@ -175,6 +232,9 @@ void UpdateSelectCupGridCupCells(void) {
 }
 
 void RequestSelectCupGridCupPicture(void) {
+#ifdef PLATFORM_PORT
+    if (PortShowsExtraCup()) return; // no pictures of these courses
+#endif
     if (gBootInfo->mBootType != BOOT_TYPE_MULTIBOOT) {
         TrySetCupPictureIndexAndQueueLoads(
             gSelectCupGridCourseIds[gSelectCupGrid->mIndex][gSelectCupGrid->mShownCourseIndex]);
@@ -203,6 +263,9 @@ void SetupSelectCupGridIndex(void) {
         grid = gSelectCupGrid;
         PrintLabelLayoutTextNoFixedAdvance(
             cellIndex, gSelectCupGridCourseLabelIndices[courseIndex], gSelectCupGrid->mSelectCupMBnll,
+#ifdef PLATFORM_PORT
+            PortShowsExtraCup() ? (void *) PortExtraCourseName(PortShowsExtraCup(), courseIndex) :
+#endif
             GetBmgEntry(grid->mCommonMessages, gSelectCupGridCupMessageIndices[grid->mIndex][courseIndex]),
             grid->mSelectCupMBncl, grid->mSelectCupMTable);
     }
@@ -212,7 +275,12 @@ void SetupSelectCupGridIndex(void) {
     for (courseIndex = 0; courseIndex < 4; courseIndex++) {
         gSelectCupGrid->mSelectCupMTable[gSelectCupGridTrophyCells[courseIndex]].mVisible = 0;
     }
+#ifdef PLATFORM_PORT
+    gSelectCupGrid->mSelectCupMTable[0x13].mVisible = !PortShowsExtraCup(); // the Shell or Banana Cup's name
+    if (gSelectCupGrid->mMode == SELECT_CUP_GRID_MODE_SHOW_RECORDS && !PortShowsExtraCup()) {
+#else
     if (gSelectCupGrid->mMode == SELECT_CUP_GRID_MODE_SHOW_RECORDS) {
+#endif
         if (GetMirrorMode() != 0) {
             engineOrMirrorSlot = 3;
         } else {
@@ -253,6 +321,14 @@ void SetupSelectCupGridIndex(void) {
 
 // Stores the cup at mIndex and the first course of that cup in the race setup record.
 void SetCupFromSelectCupGrid(void) {
+#ifdef PLATFORM_PORT
+    gPortExtraCup = PortShowsExtraCup();
+    if (gPortExtraCup) {
+        SetCupIndex(gSelectCupGrid->mIndex);
+        SetCourseId(GetCupCourseId(gSelectCupGrid->mIndex, 0));
+        return;
+    }
+#endif
     SetCupIndex(gSelectCupGridCupIndices[gSelectCupGrid->mIndex]);
     SetCourseId(gSelectCupGridFirstCourseIds[gSelectCupGrid->mIndex]);
 }
@@ -520,6 +596,10 @@ void InitSelectCupGrid(void *heap, void *mainOam, void *subOam, s32 mode) {
         reg_GX_DISPCNT = (reg_GX_DISPCNT & ~REG_GX_DISPCNT_DISPLAY_MASK) | 0x1800;
     }
     heap = CreateFrmHeapFromMaxFree(heap);
+#ifdef PLATFORM_PORT
+    gPortExtraCup = 0;
+    gPortExtraPage = 0; // the screen opens on the usual page
+#endif
     gSelectCupGrid = HeapAlloc(heap, sizeof(*gSelectCupGrid));
     gSelectCupGrid->mHeap = heap;
     gSelectCupGrid->mState = SELECT_CUP_GRID_STATE_WAIT_FADE;
@@ -705,6 +785,16 @@ void AdvanceSelectCupGridChoose(void) {
         touchedRectIndex = RectTableFindContaining(gSelectCupGrid->mSelectCupSBnbl, gInputPairXs[inputIndex].mPairX,
                                                    gInputPairYs[inputIndex].mPairY);
     }
+#ifdef PLATFORM_PORT
+    // The extra page by touch too (phones show no R in menus): the "RETRO GRAND PRIX" label.
+    if (pressedFlag != 0 && (touchedRectIndex < 0 || touchedRectIndex > 7) && PortExtraPageAllowed()) {
+        s32 touchX = gInputPairXs[inputIndex].mPairX, touchY = gInputPairYs[inputIndex].mPairY;
+        if (touchY >= 84 && touchY < 106 && touchX >= 50 && touchX < 200) {
+            PortToggleExtraPage();
+            return;
+        }
+    }
+#endif
     inputSlot = &gInputSlots[inputIndex];
     if ((u16) (gInputSlots[inputIndex].mPressedBits & PAD_KEY_B) != 0) {
         goto runReturnRequest;
@@ -778,6 +868,12 @@ checkCupTouch:
         RequestSelectCupGridWaitChosen();
         return;
     }
+#ifdef PLATFORM_PORT
+    if ((u16) (inputSlot->mPressedBits & PAD_KEY_R) != 0 && PortExtraPageAllowed()) {
+        PortToggleExtraPage();
+        return;
+    }
+#endif
     if ((u16) (inputSlot->mPressedBits & PAD_KEY_A) != 0) {
         RequestSelectCupGridWaitChosen();
         gSelectCupGrid->mHighlightShown = FALSE;

@@ -110,6 +110,9 @@ void FillNsbmdModel(Nsbmd *model, ModelAnimation *animation, NsbmdModel *record)
             frameWork.mDataIndex = 0;
             do {
                 animation->mHead.mFrameIndex = TO_FIXED12(frame);
+#ifdef PLATFORM_PORT
+                if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
                 animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
                 NNSi_G3dAnmCalcNsBtp(&frameWork.mResult, animation->mAnmObjs[0], frameWork.mDataIndex);
                 record->mTexImageParams[frame] = frameWork.mResult.mPrmTexImage & 0x3ff0ffff;

@@ -342,6 +342,9 @@ BOOL PickNearestNearbyItemPointLink(ItemPointLinkRef *in, ItemPointLinkRef *out,
     Vec3 *posAlias = pos;
     ItemPointLink *nodeAlias = node;
 
+#ifdef PLATFORM_PORT
+    if (linkPos == NULL) return FALSE; // the unused courses: item route points without a position
+#endif
     best = node;
     deltaX = FROM_FIXED12(linkPos->x - pos->x);
     deltaY = FROM_FIXED12(linkPos->y - pos->y);
@@ -362,6 +365,9 @@ BOOL PickNearestNearbyItemPointLink(ItemPointLinkRef *in, ItemPointLinkRef *out,
             }
             for (firstAroundIndex = 0; firstAroundIndex < nextCount; firstAroundIndex++) {
                 linkAroundNext = nextLink->mNextLinks[firstAroundIndex];
+#ifdef PLATFORM_PORT
+                if (linkAroundNext == NULL) continue; // the unused courses' item routes have gaps
+#endif
                 linkPos = linkAroundNext->mPointPos;
                 deltaX = FROM_FIXED12(linkPos->x - pos->x);
                 deltaY = FROM_FIXED12(linkPos->y - posAlias->y);
@@ -375,6 +381,9 @@ BOOL PickNearestNearbyItemPointLink(ItemPointLinkRef *in, ItemPointLinkRef *out,
             previousCount = nextLink->mPreviousCount;
             for (secondAroundIndex = 0; secondAroundIndex < previousCount; secondAroundIndex++) {
                 linkAroundNext = nextLink->mPreviousLinks[secondAroundIndex];
+#ifdef PLATFORM_PORT
+                if (linkAroundNext == NULL) continue; // the unused courses' item routes have gaps
+#endif
                 if (linkAroundNext != node) {
                     linkPos = linkAroundNext->mPointPos;
                     deltaX = FROM_FIXED12(linkPos->x - pos->x);
@@ -404,6 +413,9 @@ BOOL PickNearestNearbyItemPointLink(ItemPointLinkRef *in, ItemPointLinkRef *out,
             }
             for (firstAroundIndex = 0; firstAroundIndex < previousCount; firstAroundIndex++) {
                 linkAroundPrevious = previousLink->mPreviousLinks[firstAroundIndex];
+#ifdef PLATFORM_PORT
+                if (linkAroundPrevious == NULL) continue; // the unused courses' item routes have gaps
+#endif
                 previousLinkPos = linkAroundPrevious->mPointPos;
                 deltaX = FROM_FIXED12(previousLinkPos->x - pos->x);
                 deltaY = FROM_FIXED12(previousLinkPos->y - posAlias->y);
@@ -417,6 +429,9 @@ BOOL PickNearestNearbyItemPointLink(ItemPointLinkRef *in, ItemPointLinkRef *out,
             nextCount = previousLink->mNextCount;
             for (secondAroundIndex = 0; secondAroundIndex < nextCount; secondAroundIndex++) {
                 linkAroundPrevious = previousLink->mNextLinks[secondAroundIndex];
+#ifdef PLATFORM_PORT
+                if (linkAroundPrevious == NULL) continue; // the unused courses' item routes have gaps
+#endif
                 if (linkAroundPrevious != node) {
                     previousLinkPos = linkAroundPrevious->mPointPos;
                     deltaX = FROM_FIXED12(previousLinkPos->x - pos->x);

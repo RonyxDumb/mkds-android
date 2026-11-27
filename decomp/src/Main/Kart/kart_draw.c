@@ -167,6 +167,9 @@ BOOL DrawKartKillerItem(Kart *kart) {
         frame = kart->mKartModelsEntry->mKillerItemAnimation.mFrameIndex;
         killerItemNsbca = GetKillerItemNsbca();
         killerItemNsbca->mHead.mFrameIndex = frame;
+#ifdef PLATFORM_PORT
+        if (killerItemNsbca->mAnmObjs[killerItemNsbca->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
         killerItemNsbca->mAnmObjs[killerItemNsbca->mCurrentIndex]->mFrame = killerItemNsbca->mHead.mFrameIndex;
         DrawNsbmd(GetKillerItem());
         DrawShadowWithoutMatrix(GetKillerItemS());

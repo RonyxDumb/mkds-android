@@ -444,6 +444,10 @@ void LocateAndQueueSelectCupGrid(void) {
 u32 GetSelectCupGridCupEnabled(u32 cupIndex) {
     u32 enabled;
     s32 flagIndex;
+#ifdef PLATFORM_PORT
+    extern int gPortExtraPage;
+    if (gPortExtraPage && cupIndex >= 4) return cupIndex == 4 || cupIndex == 5; // the extra page: the extra cups
+#endif
 
     enabled = 0;
     switch (gSelectCupGrid->mMode) {

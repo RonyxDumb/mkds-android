@@ -748,11 +748,17 @@ void EnterJgReverse(void *stateObject) {
         animation = gJgKindRows[gJgKind].mNsbcaAnimation;
         if (animation != NULL) {
             animation->mHead.mFrameIndex = 0;
+#ifdef PLATFORM_PORT
+            if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
             animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
         }
         animation = gJgKindRows[gJgKind].mNsbmaAnimation;
         if (animation != NULL) {
             animation->mHead.mFrameIndex = 0;
+#ifdef PLATFORM_PORT
+            if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
             animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
         }
     }
@@ -919,11 +925,17 @@ void EnterJgFollowKart(void *stateObject) {
         animation = gJgKindRows[gJgKind].mNsbcaAnimation;
         if (animation != NULL) {
             animation->mHead.mFrameIndex = 0;
+#ifdef PLATFORM_PORT
+            if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
             animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
         }
         animation = gJgKindRows[gJgKind].mNsbmaAnimation;
         if (animation != NULL) {
             animation->mHead.mFrameIndex = 0;
+#ifdef PLATFORM_PORT
+            if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
             animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
         }
     }
@@ -1039,11 +1051,17 @@ void EnterJgArrive(void *stateObject) {
         animation = gJgKindRows[gJgKind].mNsbcaAnimation;
         if (animation != NULL) {
             animation->mHead.mFrameIndex = 0;
+#ifdef PLATFORM_PORT
+            if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
             animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
         }
         animation = gJgKindRows[gJgKind].mNsbmaAnimation;
         if (animation != NULL) {
             animation->mHead.mFrameIndex = 0;
+#ifdef PLATFORM_PORT
+            if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
             animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
         }
     }

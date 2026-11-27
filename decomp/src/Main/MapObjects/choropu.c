@@ -242,6 +242,9 @@ void DrawVehicle(VehicleDrawList *drawList, Vehicle *vehicle, u32 unusedArg, u32
     animation = vehicle->mModelAnimation;
     if (animation != NULL) {
         animation->mHead.mFrameIndex = TO_FIXED12(vehicle->mAnimationFrame);
+#ifdef PLATFORM_PORT
+        if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
         animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
     }
     SendLight01Color(&vehicle->mCourseColorBlend.mColor);

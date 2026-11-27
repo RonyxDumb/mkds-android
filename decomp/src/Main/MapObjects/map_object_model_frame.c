@@ -369,6 +369,9 @@ void SetMapObjectModelNsbcaFrameIndex(MapObjectModel *mapObjectModel, u16 frameI
     ModelAnimation *animation = model->mAnimations[0];
 
     animation->mHead.mFrameIndex = TO_FIXED12(frameIndex);
+#ifdef PLATFORM_PORT
+    if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
     animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
 }
 
@@ -384,6 +387,9 @@ void SetMapObjectModelNsbmaFrameIndex(MapObjectModel *mapObjectModel, u32 frameI
     ModelAnimation *animation = mapObjectModel->mAnimations[2];
 
     animation->mHead.mFrameIndex = TO_FIXED12(frameIndex);
+#ifdef PLATFORM_PORT
+    if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
     animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
 }
 
@@ -405,6 +411,9 @@ void SetMapObjectModelNsbtaFrameIndex(MapObjectModel *mapObjectModel, s32 frameI
     ModelAnimation *animation = mapObjectModel->mAnimations[3];
 
     animation->mHead.mFrameIndex = TO_FIXED12(frameIndex);
+#ifdef PLATFORM_PORT
+    if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
     animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
 }
 
@@ -420,6 +429,9 @@ void SetMapObjectModelNsbtpFrameIndex(MapObjectModel *mapObjectModel, u16 frameI
     }
     animation = mapObjectModel->mAnimations[1];
     animation->mHead.mFrameIndex = TO_FIXED12(frameIndex);
+#ifdef PLATFORM_PORT
+    if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
     animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
 }
 

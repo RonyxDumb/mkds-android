@@ -183,7 +183,23 @@ u32 NextRandomBelowByConnectionKind(u32 limit) {
 
 #pragma thumb on
 
+#ifdef PLATFORM_PORT
+// The port's extra cups: the courses left unused in the game, on the cup screen's extra page (select_cup_grid.c) in
+// place of the Shell and Banana Cups. gPortExtraCup is 1 or 2 while the race setup's cup (4 or 5) is one of them.
+int gPortExtraPage, gPortExtraCup;
+const u32 gPortExtraCupCourseIds[2][4] = {{2, 7, 3, 8}, {6, 5, 4, 21}};
+static const u16 gPortExtraCourseNames[2][4][24] = {
+    {{'G', 'C', 'N', ' ', 'M', 'a', 'r', 'i', 'o', ' ', 'C', 'i', 'r', 'c', 'u', 'i', 't', 0}, {'B', 'E', 'T', 'A', ' ', 'W', 'a', 'r', 'i', 'o', ' ', 'S', 't', 'a', 'd', 'i', 'u', 'm', 0}, {'B', 'E', 'T', 'A', ' ', 'P', 'i', 'n', 'b', 'a', 'l', 'l', ' ', 'C', 'o', 'u', 'r', 's', 'e', 0}, {'B', 'E', 'T', 'A', ' ', 'N', 'o', 'k', 'o', 'n', 'o', 'k', 'o', ' ', 'B', 'e', 'a', 'c', 'h', 0}},
+    {{'B', 'E', 'T', 'A', ' ', 'D', 'o', 'n', 'k', 'e', 'y', ' ', 'C', 'o', 'u', 'r', 's', 'e', 0}, {'T', 'E', 'S', 'T', ' ', 'C', 'o', 'u', 'r', 's', 'e', ' ', '1', 0}, {'T', 'E', 'S', 'T', ' ', 'D', 'o', 'k', 'a', 'n', ' ', 'C', 'o', 'u', 'r', 's', 'e', 0}, {'T', 'E', 'S', 'T', ' ', 'C', 'i', 'r', 'c', 'l', 'e', 0}}};
+const u16 *PortExtraCourseName(s32 extraCup, s32 courseIndex) {
+    return gPortExtraCourseNames[(extraCup - 1) & 1][courseIndex & 3];
+}
+#endif
+
 u32 GetCupCourseId(s32 cupIndex, s32 courseIndex) {
+#ifdef PLATFORM_PORT
+    if (gPortExtraCup && cupIndex == 3 + gPortExtraCup) return gPortExtraCupCourseIds[gPortExtraCup - 1][courseIndex & 3];
+#endif
     return gCupCourseIds[cupIndex * 4 + courseIndex];
 }
 

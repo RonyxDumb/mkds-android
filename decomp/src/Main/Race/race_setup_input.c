@@ -188,6 +188,24 @@ void BuildCourseList(s32 isVersus) {
             flag = (gConnectionWork->mFlags & CONNECTION_FLAG_MULTIBOOT_SETUP) != 0;
             break;
     }
+#ifdef PLATFORM_PORT
+    {
+        // The port's extra cup in VS: its four courses, from the chosen one on.
+        extern int gPortExtraCup;
+        extern const u32 gPortExtraCupCourseIds[2][4];
+        if (gPortExtraCup && isVersus != 0 && gRaceSetup->mNextHeader.mCourseListMode != COURSE_LIST_MODE_SINGLE) {
+            u32 start = 0, i;
+            for (i = 0; i < 4; i++) {
+                if (gPortExtraCupCourseIds[gPortExtraCup - 1][i] == (u32) gRaceSetup->mNextHeader.mCourseId) start = i;
+            }
+            for (i = 0; i < 4; i++) {
+                gRaceSetup->mCourseList[i] = gPortExtraCupCourseIds[gPortExtraCup - 1][(start + i) % 4];
+            }
+            gRaceSetup->mNextHeader.mCourseId = gRaceSetup->mCourseList[0];
+            return;
+        }
+    }
+#endif
     switch (gRaceSetup->mNextHeader.mCourseListMode) {
         case COURSE_LIST_MODE_IN_ORDER:
             if (isVersus != 0) {
@@ -321,8 +339,16 @@ void AssignCpuNumbersAndSetupFirstCourse(void) {
             ResetCupRecords();
             gRaceSetup->mNextHeader.mCourseNumber = 1;
             gRaceSetup->mNextHeader.mRaceKind = RACE_KIND_START_GP;
+#ifdef PLATFORM_PORT
+            {
+                u32 GetCupCourseId(s32 cupIndex, s32 courseIndex); // the port's extra cup (oam.c)
+                gRaceSetup->mNextHeader.mCourseId =
+                    GetCupCourseId(gRaceSetup->mNextHeader.mCupIndex, gRaceSetup->mNextHeader.mCourseNumber - 1);
+            }
+#else
             gRaceSetup->mNextHeader.mCourseId =
                 gCupCourseIdTable[gRaceSetup->mNextHeader.mCupIndex][gRaceSetup->mNextHeader.mCourseNumber - 1];
+#endif
             break;
         case MODE_VS:
             BuildCourseList(1);

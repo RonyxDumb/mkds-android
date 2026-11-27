@@ -173,9 +173,15 @@ void DrawFlipper(void *mapObjectList, Flipper *flipper) {
     SetMapObjectModelMirror(gFlipper, flipper->mMirror, 0);
     animation = gFlipper->mAnimations[1];
     animation->mHead.mFrameIndex = TO_FIXED12(flipper->mNsbtpFrameIndex);
+#ifdef PLATFORM_PORT
+    if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
     animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
     animation = gFlipper->mAnimations[3];
     animation->mHead.mFrameIndex = TO_FIXED12(flipper->mNsbtaFrameIndex);
+#ifdef PLATFORM_PORT
+    if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
     animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
     DrawMapObjectModel(mapObjectList, gFlipper, flipper);
 }

@@ -118,6 +118,9 @@ void AdvanceKartDrawState(Kart *kart) {
             AdvanceKartAnimationChangeTimer(kart);
         }
         characterAnimation = kart->mKartModelsEntry->mCharacterAnimation;
+#ifdef PLATFORM_PORT
+        if (characterAnimation->mAnmObjs[characterAnimation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
         characterAnimation->mAnmObjs[characterAnimation->mCurrentIndex]->mFrame = characterAnimation->mHead.mFrameIndex;
     }
     if ((kart->mEffectFlags & KART_EFFECT_BLINK_GUARD) != 0) {

@@ -17,6 +17,7 @@ DS hardware replaced by a native platform layer (OpenGL ES 3 graphics, native so
 - Local multiplayer over Wi-Fi between phones running the app (Multi-Card Play)
 - Online multiplayer: the same Multi-Card Play over the internet, through a small relay server you can host yourself
 - Game language follows the phone's language (English, French, German, Italian, Spanish)
+- Two extra cups with the eight courses the game left unused (see below)
 
 ## Requirements
 - Android 8.0 or newer, ARM (arm64-v8a or armeabi-v7a)
@@ -61,6 +62,16 @@ files: every file of the game that the mod changes (graphics, models, courses th
 ones, music, texts) is used. Courses, cups and menus that a mod adds with its own code are not: with CTGP Nitro, for
 example, its title, menus and artwork and its versions of the original courses are there, its new courses are not. When
 a mod changes the game's code, its sound archive is left out too (its sounds go with its code).
+
+## Extra cups (unused courses)
+The game's data still holds eight courses that were never put in a cup: Mario Circuit from the GameCube game, early
+versions of Wario Stadium and of other courses, and a few test courses. The port makes them playable as two extra cups.
+On the cup screen of **Grand Prix** and **VS**, touch **RETRO GRAND PRIX** (or press R): the Retro row turns into the
+extra row, with a red shell (GCN Mario Circuit, beta Wario Stadium, beta pinball course, beta Nokonoko beach) and a cyan
+banana (beta Donkey course, test course 1, dokan test course, test circle); touch the label again to go back.
+
+They are as the developers left them: some have no textures (the test courses), no minimap picture or few objects, and
+the computer players do not always find their way. The extra cups keep no records and win no trophies.
 
 ## One screen
 The game fills the display, without empty bars:

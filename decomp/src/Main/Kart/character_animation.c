@@ -190,6 +190,9 @@ void AdvanceKartCharacterAnimation(Kart *kart) {
         StartModelAnimationBlend(modelsEntry->mCharacterAnimation, animationState->mNextAnimationIndex);
         faceAnimation = modelsEntry->mFaceAnimation;
         faceAnimation->mHead.mFrameIndex = gCharacterFaceFrames[0];
+#ifdef PLATFORM_PORT
+        if (faceAnimation->mAnmObjs[faceAnimation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
         faceAnimation->mAnmObjs[faceAnimation->mCurrentIndex]->mFrame = faceAnimation->mHead.mFrameIndex;
         animationState->mNextAnimationPending = FALSE;
     } else {
@@ -202,6 +205,9 @@ void SetCharacterFaceFrameIndex(struct KartModelsEntry *kartModelsEntry, s32 fac
     ModelAnimation *faceAnimation = kartModelsEntry->mFaceAnimation;
 
     faceAnimation->mHead.mFrameIndex = gCharacterFaceFrames[faceFrameIndex];
+#ifdef PLATFORM_PORT
+    if (faceAnimation->mAnmObjs[faceAnimation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
     faceAnimation->mAnmObjs[faceAnimation->mCurrentIndex]->mFrame = faceAnimation->mHead.mFrameIndex;
 }
 

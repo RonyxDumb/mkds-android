@@ -118,6 +118,9 @@ void CreateKoopaBlock(void) {
     void *file;
 
     file = FindCourseMapObjFile("koopa_block.nsbmd");
+#ifdef PLATFORM_PORT
+    if (file == NULL) file = FindCourseMapObjFile("test_brock.nsbmd"); // the unused test course's block
+#endif
     CreateNsbmd(&gKoopaBlock, file, NULL);
     SetNsbmdPolygonIdLightEmiAll(gKoopaBlock, 0x3f, 2, 0x294a);
     SetMapObjectsModel(&gKoopaBlockDrawList->mList, gKoopaBlock);

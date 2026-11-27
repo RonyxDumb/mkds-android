@@ -81,6 +81,9 @@ void InitModelAnimationEntries(ModelAnimation *modelAnimation, void *anmFile, vo
     void *anmResource = NULL;
     u8 objIndex = 0;
     NNSG3dAnmObj *anmObj;
+#ifdef PLATFORM_PORT
+    if (anmFile == NULL) return; // the unused courses lack some objects' animations: they stand still
+#endif
 
     for (objIndex = 0; objIndex < modelAnimation->mAnmObjCount; objIndex++) {
         switch (modelAnimation->mKind) {
@@ -177,6 +180,9 @@ void AdvanceModelAnimation(ModelAnimation *modelAnimation) {
         }
     }
     AdvanceModelAnimationFrame(&modelAnimation->mHead);
+#ifdef PLATFORM_PORT
+    if (modelAnimation->mAnmObjs[modelAnimation->mCurrentIndex] == NULL) return; // no animation (unused courses)
+#endif
     modelAnimation->mAnmObjs[modelAnimation->mCurrentIndex]->mFrame = modelAnimation->mHead.mFrameIndex;
 }
 
@@ -198,6 +204,9 @@ void AdvanceModelAnimationBlend(ModelAnimation *modelAnimation) {
 // Frame count of the playing entry in 20.12 fixed point.
 s32 GetModelAnimationFrameCountFixed(ModelAnimation *modelAnimation) {
     enum { KIND_FIRST } kind = modelAnimation->mKind;
+#ifdef PLATFORM_PORT
+    if (modelAnimation->mAnmObjs[modelAnimation->mCurrentIndex] == NULL) return TO_FIXED12(1); // no animation
+#endif
 
     return TO_FIXED12(gAnmFrameCountGetters[kind](modelAnimation->mAnmObjs[modelAnimation->mCurrentIndex]));
 }

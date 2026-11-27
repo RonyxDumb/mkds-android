@@ -131,6 +131,9 @@ void DrawBridge(CollisionMapObject *object, void *viewMatrix, u32 alpha) {
     object->mMapObject.mMatrix.mRows[3].z = object->mMapObject.mPos.z >> 4;
     animation = gBridgeNsbca;
     animation->mHead.mFrameIndex = bridge->mAnimationFrameIndex;
+#ifdef PLATFORM_PORT
+    if (animation->mAnmObjs[animation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
     animation->mAnmObjs[animation->mCurrentIndex]->mFrame = animation->mHead.mFrameIndex;
     DrawNsbmdWithMatrixAndMaxAlpha(object->mModel, &object->mMapObject.mMatrix, &object->mMapObject.mScale, alpha);
 }

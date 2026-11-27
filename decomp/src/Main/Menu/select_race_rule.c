@@ -46,6 +46,20 @@
 #include "Main/Menu/select_race_rule_load.h"
 #include "Main/Menu/select_cup_course.h"
 
+#ifdef PLATFORM_PORT
+// The port's extra cup (select_cup_grid.c): its own course names and courses, no pictures and no time records.
+extern int gPortExtraCup;
+const u16 *PortExtraCourseName(s32 extraCup, s32 courseIndex);
+u32 GetCupCourseId(s32 cupIndex, s32 courseIndex);
+static BOOL PortExtraCupShown(void) { return gPortExtraCup && GetCupIndex() == 3 + gPortExtraCup; }
+static void *PortCourseName(Bmg *bmg, s32 messageIndex, s32 courseIndex) {
+    return PortExtraCupShown() ? (void *) PortExtraCourseName(gPortExtraCup, courseIndex) : GetBmgEntry(bmg, messageIndex);
+}
+#else
+#define PortCourseName(bmg, messageIndex, courseIndex) GetBmgEntry(bmg, messageIndex)
+#define PortExtraCupShown() FALSE
+#endif
+
 #pragma thumb on
 
 void AdvanceSelectRaceRuleWaitConfirmChoices(void) {
@@ -374,8 +388,8 @@ void SetupSelectCupCourseObjects(void) {
             selectCupCourse = gSelectCupCourse;
             PrintLabelLayoutTextNoFixedAdvance(
                 1, gSelectCupCourseLabelIndices[cellIndex], gSelectCupCourse->mSelectCupMBnll,
-                GetBmgEntry(gSelectCupCourse->mCommonMessages,
-                            gCupCourseNameMessageIndices[gCupRowsByCupIndex[GetCupIndex()]][cellIndex]),
+                PortCourseName(gSelectCupCourse->mCommonMessages,
+                            gCupCourseNameMessageIndices[gCupRowsByCupIndex[GetCupIndex()]][cellIndex], cellIndex),
                 selectCupCourse->mSelectCupMBncl, selectCupCourse->mSelectCupMTable);
         }
         selectCupCourse = gSelectCupCourse;
@@ -437,16 +451,17 @@ void RefreshSelectCupCourseForIndex(void) {
         selectCupCourse = gSelectCupCourse;
         PrintLabelLayoutTextNoFixedAdvance(
             0, 0, gSelectCupCourse->mSelectCupCourseTaOrVsMBnll,
-            GetBmgEntry(gSelectCupCourse->mCommonMessages,
-                        gCupCourseNameMessageIndices[gCupRowsByCupIndex[GetCupIndex()]][selectCupCourse->mIndex]),
+            PortCourseName(gSelectCupCourse->mCommonMessages,
+                        gCupCourseNameMessageIndices[gCupRowsByCupIndex[GetCupIndex()]][selectCupCourse->mIndex], selectCupCourse->mIndex),
             selectCupCourse->mSelectCupCourseTaOrVsMBncl, selectCupCourse->mSelectCupCourseTaOrVsMTable);
         selectCupCourse = gSelectCupCourse;
         PrintLabelLayoutTextNoFixedAdvance(
             0, 1, gSelectCupCourse->mSelectCupCourseTaOrVsMBnll,
-            GetBmgEntry(gSelectCupCourse->mCommonMessages,
-                        gCupCourseNameMessageIndices[gCupRowsByCupIndex[GetCupIndex()]][selectCupCourse->mIndex]),
+            PortCourseName(gSelectCupCourse->mCommonMessages,
+                        gCupCourseNameMessageIndices[gCupRowsByCupIndex[GetCupIndex()]][selectCupCourse->mIndex], selectCupCourse->mIndex),
             selectCupCourse->mSelectCupCourseTaOrVsMBncl, selectCupCourse->mSelectCupCourseTaOrVsMTable);
-        if (IsTimeRecordFilled(gCupRowCourseIds[gCupRowsByCupIndex[GetCupIndex()]][gSelectCupCourse->mIndex], 0)) {
+        if (!PortExtraCupShown() &&
+            IsTimeRecordFilled(gCupRowCourseIds[gCupRowsByCupIndex[GetCupIndex()]][gSelectCupCourse->mIndex], 0)) {
             GetTimeRecordTime(gCupRowCourseIds[gCupRowsByCupIndex[GetCupIndex()]][gSelectCupCourse->mIndex], 0,
                               &recordTime);
             FormatTimeFullWidth(&recordTime, timeText);
@@ -460,7 +475,8 @@ void RefreshSelectCupCourseForIndex(void) {
                                             selectCupCourse->mSelectCupCourseTaOrVsMBncl,
                                             selectCupCourse->mSelectCupCourseTaOrVsMTable, 9);
         }
-        if (IsTimeRecordFilled(gCupRowCourseIds[gCupRowsByCupIndex[GetCupIndex()]][gSelectCupCourse->mIndex], 5)) {
+        if (!PortExtraCupShown() &&
+            IsTimeRecordFilled(gCupRowCourseIds[gCupRowsByCupIndex[GetCupIndex()]][gSelectCupCourse->mIndex], 5)) {
             GetTimeRecordTime(gCupRowCourseIds[gCupRowsByCupIndex[GetCupIndex()]][gSelectCupCourse->mIndex], 5,
                               &recordTime);
             FormatTimeFullWidth(&recordTime, timeText);
@@ -474,13 +490,21 @@ void RefreshSelectCupCourseForIndex(void) {
                                             selectCupCourse->mSelectCupCourseTaOrVsMBncl,
                                             selectCupCourse->mSelectCupCourseTaOrVsMTable, 9);
         }
-        TrySetCupPictureIndexAndQueueLoads(
-            gCupRowCourseIds[gCupRowsByCupIndex[GetCupIndex()]][gSelectCupCourse->mIndex]);
-        gSelectCupCourse->mCupPicturePending = TRUE;
+        if (!PortExtraCupShown()) {
+            TrySetCupPictureIndexAndQueueLoads(
+                gCupRowCourseIds[gCupRowsByCupIndex[GetCupIndex()]][gSelectCupCourse->mIndex]);
+            gSelectCupCourse->mCupPicturePending = TRUE;
+        }
     }
 }
 
 void SetCourseIdFromSelectCupCourse(void) {
+#ifdef PLATFORM_PORT
+    if (PortExtraCupShown()) {
+        SetCourseId(GetCupCourseId(GetCupIndex(), gSelectCupCourse->mIndex));
+        return;
+    }
+#endif
     SetCourseId(gCupRowCourseIds[gCupRowsByCupIndex[GetCupIndex()]][gSelectCupCourse->mIndex]);
 }
 

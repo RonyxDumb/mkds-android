@@ -288,6 +288,9 @@ void InitKart(Kart *kart, void (**slotFunctions)(Kart *)) {
         if ((kart->mEntryFlags & KART_ENTRY_HAS_CHARACTER_ANIMATION) != 0) {
             AdvanceKartCharacterAnimation(kart);
             characterAnimation = kart->mKartModelsEntry->mCharacterAnimation;
+#ifdef PLATFORM_PORT
+            if (characterAnimation->mAnmObjs[characterAnimation->mCurrentIndex] != NULL) // (no animation: unused courses)
+#endif
             characterAnimation->mAnmObjs[characterAnimation->mCurrentIndex]->mFrame =
                 characterAnimation->mHead.mFrameIndex;
         }

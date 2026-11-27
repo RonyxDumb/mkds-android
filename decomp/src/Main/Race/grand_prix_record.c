@@ -115,6 +115,10 @@ BOOL TrySetGrandPrixRecord(void) {
     BOOL stored = FALSE;
     s32 engineClass;
     MenuShared *menuShared = gMenuShared;
+#ifdef PLATFORM_PORT
+    extern int gPortExtraCup;
+    if (gPortExtraCup) return FALSE; // the port's extra cup keeps no records (nor trophies)
+#endif
     switch (menuShared->mEngineIndex) {
         case ENGINE_CLASS_SLOW:
             engineClass = stored;
