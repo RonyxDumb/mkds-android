@@ -25,6 +25,7 @@ static IpcShared *s;
 static int s_block_fd = -1, s_vram_fd = -1;
 static volatile pid_t s_pid;
 static volatile bool s_exited;
+static volatile int s_exit_signal, s_exit_code; // how the game process ended (for the start error)
 static uint32_t s_front;
 
 // ------------------------------------------------------------------------------------------------ logging
@@ -87,6 +88,8 @@ static void *watch(void *arg) {
     int status = 0;
     while (waitpid(s_pid, &status, 0) < 0 && errno == EINTR) {
     }
+    if (WIFSIGNALED(status)) s_exit_signal = WTERMSIG(status);
+    else s_exit_code = WEXITSTATUS(status);
     s_exited = true;
     if (WIFSIGNALED(status)) {
         port_log("ipc: the game process ended with signal %d", WTERMSIG(status));
@@ -141,7 +144,16 @@ const char *ipc_start(const char *exe, const char *rom, const char *save, const 
     if (state == IPC_FAILED) {
         snprintf(err, sizeof(err), "%s", s->error);
     } else if (s_exited) {
-        snprintf(err, sizeof(err), "The game process ended while starting (see log.txt).");
+        // Which way it ended tells a crash (a signal: the report is in crash.txt) from a program that could not run.
+        if (s_exit_signal) {
+            snprintf(err, sizeof(err), "The game process ended while starting (signal %d%s).", s_exit_signal,
+                     s_exit_signal == SIGSEGV ? ", segmentation fault" : s_exit_signal == SIGILL ? ", illegal instruction"
+                     : s_exit_signal == SIGBUS ? ", bus error" : s_exit_signal == SIGABRT ? ", abort" : "");
+        } else if (s_exit_code == 127) {
+            snprintf(err, sizeof(err), "The game process could not be run (exit code 127: the system refused it).");
+        } else {
+            snprintf(err, sizeof(err), "The game process ended while starting (exit code %d).", s_exit_code);
+        }
     } else {
         snprintf(err, sizeof(err), "The game process did not start in time.");
     }

@@ -502,12 +502,25 @@ static void set_plain(int alpha_mode, float opacity) {
 
 // One screen, races: over the top screen (drawn already), the touch screen's map round in the lower right corner and
 // its sprites over it.
+// The options (issue #23): the map's size in percent of the usual one (0: hidden; the results after the goal are
+// still shown) and its corner (0 lower right, 1 lower left, 2 upper right, 3 upper left).
+// Menus (issue #13): the two screens side by side (0) or the touch screen alone, whole, in the middle (1).
+static volatile int s_hud_size = 100, s_hud_corner, s_menu_mode;
+
+void present_set_hud(int size_percent, int corner, int menu_mode) {
+    s_hud_size = size_percent < 0 ? 0 : size_percent > 200 ? 200 : size_percent;
+    s_hud_corner = corner & 3;
+    s_menu_mode = menu_mode;
+}
+
 static void draw_one_race_hud(const int *r, int w, int h) {
     s_one_touch[2] = s_one_touch[3] = 0; // nothing to touch in races
     if (!s_one_hud) return;
+    if (s_one_hud_map && s_hud_size == 0) return;
     float k = r[3] / 192.0f;
-    float scale = s_one_hud_map ? 0.62f : 0.6f, pw = 256 * scale * k, ph = 192 * scale * k; // under the lap times
-    float x = r[0] + r[2] - pw, y = r[1] + r[3] - ph;
+    float scale = s_one_hud_map ? 0.62f * s_hud_size / 100.0f : 0.6f, pw = 256 * scale * k, ph = 192 * scale * k;
+    int corner = s_one_hud_map ? s_hud_corner : 0;
+    float x = (corner & 1) ? r[0] : r[0] + r[2] - pw, y = (corner & 2) ? r[1] : r[1] + r[3] - ph;
     if (!s_one_hud_map) {
         glEnable(GL_BLEND);
         glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -553,6 +566,21 @@ void present_draw(const int layout[8], int w, int h, float t) {
     }
     if (one) {
         int only_top[8] = {layout[0], layout[1], layout[2], layout[3], 0, 0, 0, 0};
+        if (s_one_kind == 1 && !s_alt && s_menu_mode == 1) {
+            // Menus, touch screen only: as large as the display's height allows, in its proportions, centred.
+            float bw = s_shown.width_bottom > 0 ? (float) s_shown.width_bottom : 256.0f;
+            int ph = layout[3], pw = (int) (bw / 192.0f * (float) ph + 0.5f);
+            if (pw > layout[2]) {
+                pw = layout[2];
+                ph = (int) (192.0f / bw * (float) pw + 0.5f);
+            }
+            int bottom[8] = {0, 0, 0, 0, layout[0] + (layout[2] - pw) / 2, layout[1] + (layout[3] - ph) / 2, pw, ph};
+            s_stretch = true;
+            present_draw_screens(bottom, w, h, t);
+            s_stretch = false;
+            for (int i = 0; i < 4; i++) s_one_touch[i] = (float) bottom[4 + i];
+            return;
+        }
         if (s_one_kind == 1 && !s_alt) {
             // Menus: the two screens side by side, each filling its half of the display (stretched to it).
             int half = layout[2] / 2;

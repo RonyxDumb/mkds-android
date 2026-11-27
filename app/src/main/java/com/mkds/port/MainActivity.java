@@ -91,6 +91,36 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
+    /** The game could not start: the reason, the device, the crash report (if any) and the end of the log, which
+     * can be copied for a bug report (log.txt is in the app's private storage, out of the player's reach). */
+    private void showStartError(String err) {
+        StringBuilder text = new StringBuilder(err).append("\n\n").append("Mario Kart DS ")
+                .append(BuildConfig.VERSION_NAME).append(", Android ").append(android.os.Build.VERSION.RELEASE)
+                .append(", ").append(android.os.Build.MANUFACTURER).append(' ').append(android.os.Build.MODEL)
+                .append(", ").append(android.text.TextUtils.join("/", android.os.Build.SUPPORTED_ABIS)).append('\n');
+        for (String name : new String[] {"crash.txt", "log.txt"}) {
+            File f = new File(getFilesDir(), name);
+            if (!f.isFile()) continue;
+            try {
+                byte[] all = java.nio.file.Files.readAllBytes(f.toPath());
+                int from = Math.max(0, all.length - 6000);
+                text.append('\n').append(name).append(":\n").append(new String(all, from, all.length - from, "UTF-8"));
+            } catch (Exception ignored) {
+            }
+        }
+        new File(getFilesDir(), "crash.txt").delete(); // shown here, not again at the next start
+        final String report = text.toString();
+        new AlertDialog.Builder(this).setTitle("The game could not start").setMessage(report)
+                .setPositiveButton("Copy report", (d, w) -> {
+                    android.content.ClipboardManager cm =
+                            (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("mkds start error", report));
+                    toast("Copied: paste it in a bug report");
+                    finish();
+                })
+                .setNegativeButton("Quit", (d, w) -> finish()).setCancelable(false).show();
+    }
+
     /** The report of the last crash, with the log before it: shown once, with a button to copy it. */
     private void showCrashReport(File crash) {
         StringBuilder text = new StringBuilder();
@@ -260,13 +290,14 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             }
             // The language, and the options the game reads at its start (port/platform/os.c).
             // 0x200: one screen (what the game shows on two screens is made for one, gl/present.c).
-            Native.setLanguage(mLanguage | 0x200 | (OptionsScreen.unlockAll(this) ? 0x100 : 0));
+            // Dual-screen devices: the two screens as on a DS (no 0x200), the touch screen on the second display.
+            sDual = OptionsScreen.secondDisplay(this) && DualScreen.secondDisplay(this) != null;
+            Native.setLanguage(mLanguage | (sDual ? 0 : 0x200) | (OptionsScreen.unlockAll(this) ? 0x100 : 0));
             applyGraphics();
             mOnline.applyVolume();
             String err = Native.start(mGameRom.getAbsolutePath(), saveFile().getAbsolutePath());
             if (err != null) {
-                new AlertDialog.Builder(this).setTitle("Mario Kart DS").setMessage(err)
-                        .setPositiveButton("Quit", (d, w) -> finish()).setCancelable(false).show();
+                showStartError(err);
                 return;
             }
             sStarted = true;
@@ -276,6 +307,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         SurfaceView surface = new SurfaceView(this);
         surface.getHolder().addCallback(this);
         mControls = new ControlsView(this);
+        mControls.setDual(sDual);
         mControls.setOnNetwork(mOnline::showSettings);
         mControls.setOnline(mOnline.isOnline());
         mControls.setOnMic(mOnline::toggleMic);
@@ -288,6 +320,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         setContentView(root);
         hideSystemBars();
         preferHighRefreshRate();
+        if (mResumed) showDualScreen(true);
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                     android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::onGameBack);
@@ -378,6 +411,11 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             }
 
             @Override
+            public void remapGamepad() {
+                GamepadMapping.showEditor(MainActivity.this);
+            }
+
+            @Override
             public void editLayout() {
                 // The editor is drawn by the controls over the paused game; the options come back after it.
                 if (mOptions != null) mOptions.close();
@@ -408,6 +446,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
     private void applyGraphics() {
         Native.setGraphics(OptionsScreen.maxScale(this), OptionsScreen.highFrameRate(this));
+        Native.setHud(OptionsScreen.hudSize(this), OptionsScreen.hudCorner(this), OptionsScreen.menuScreens(this));
     }
 
     // The save file as the game last wrote it (the game is paused while the options are open, which writes it).
@@ -638,10 +677,25 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
+    // Dual-screen devices: the touch screen's window on the second display, while the game is in front.
+    private static boolean sDual;
+    private DualScreen mDualScreen;
+
+    private void showDualScreen(boolean show) {
+        if (show && sDual && sStarted && mControls != null && mDualScreen == null) {
+            ControlsView controls = mControls;
+            mDualScreen = DualScreen.show(this, controls::setExternalTouch);
+        } else if (!show && mDualScreen != null) {
+            mDualScreen.dismiss();
+            mDualScreen = null;
+        }
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
         mResumed = true;
+        showDualScreen(true);
         updateVoice();
         holdWifi(true);
         if (sStarted && mOptions == null) Native.setPaused(false);
@@ -651,6 +705,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     protected void onPause() {
         super.onPause();
         mResumed = false;
+        showDualScreen(false);
         updateVoice();
         holdWifi(false);
         if (sStarted) Native.setPaused(true);
@@ -740,7 +795,13 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         getSystemService(android.hardware.input.InputManager.class).unregisterInputDeviceListener(mDeviceListener);
     }
 
-    private static int buttonFor(int keyCode) {
+    private int buttonFor(int keyCode) {
+        int mapped = GamepadMapping.buttonFor(this, keyCode);
+        if (mapped >= 0) return mapped;
+        return defaultButtonFor(keyCode);
+    }
+
+    static int defaultButtonFor(int keyCode) {
         switch (keyCode) {
             case KeyEvent.KEYCODE_BUTTON_A: return Native.A;
             case KeyEvent.KEYCODE_BUTTON_B: return Native.B;
@@ -785,8 +846,33 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         return true;
     }
 
+    // The options screen with a gamepad whose D-pad or stick are axes (most of them): moves as D-pad keys, once per
+    // push (issue #12).
+    private int mMenuAxes;
+
+    private boolean optionsAxes(MotionEvent event) {
+        float x = event.getAxisValue(MotionEvent.AXIS_X) + event.getAxisValue(MotionEvent.AXIS_HAT_X);
+        float y = event.getAxisValue(MotionEvent.AXIS_Y) + event.getAxisValue(MotionEvent.AXIS_HAT_Y);
+        int dirs = 0;
+        if (x < -0.5f) dirs |= Native.LEFT;
+        if (x > 0.5f) dirs |= Native.RIGHT;
+        if (y < -0.5f) dirs |= Native.UP;
+        if (y > 0.5f) dirs |= Native.DOWN;
+        int pressed = dirs & ~mMenuAxes;
+        mMenuAxes = dirs;
+        if ((pressed & Native.UP) != 0) mOptions.navigate(KeyEvent.KEYCODE_DPAD_UP);
+        if ((pressed & Native.DOWN) != 0) mOptions.navigate(KeyEvent.KEYCODE_DPAD_DOWN);
+        if ((pressed & Native.LEFT) != 0) mOptions.navigate(KeyEvent.KEYCODE_DPAD_LEFT);
+        if ((pressed & Native.RIGHT) != 0) mOptions.navigate(KeyEvent.KEYCODE_DPAD_RIGHT);
+        return true;
+    }
+
     @Override
     public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        if (mOptions != null && (event.getSource() & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+                && event.getAction() == MotionEvent.ACTION_MOVE) {
+            return optionsAxes(event);
+        }
         if (mControls != null && (event.getSource() & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
                 && event.getAction() == MotionEvent.ACTION_MOVE) {
             float x = event.getAxisValue(MotionEvent.AXIS_X) + event.getAxisValue(MotionEvent.AXIS_HAT_X);

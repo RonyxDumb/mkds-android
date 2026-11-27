@@ -37,28 +37,52 @@ void CARD_SetPulledOutCallback(CARDPulledOutCallback callback) { (void) callback
 void CARD_InitPulledOutCallback(void) {}
 void CARD_TerminateForPulledOut(void) {}
 
+// Asynchronous completions: the callback runs later, at an interrupt point, as the card thread does on the DS. On
+// the DS, CARD_WaitBackupAsync returns only once the callback has run (and any request it starts in turn has
+// finished): the game's save code reads the result its callbacks leave (error code, decrypted data) right after the
+// wait, and starts the next request then. A wait that returned before the callback left that request without its
+// lock (TryLockBackup took a new lock ID each time and the earlier one was never given back): after a few dozen
+// saves no lock ID was left and every later write was skipped (progress lost, issues #11 and #19).
 typedef struct DeferredCall {
     CARDCallback fn;
     void *arg;
+    bool backup;
 } DeferredCall;
 
-static void run_callback(void *p) {
-    DeferredCall *call = p;
-    CARDCallback fn = call->fn;
-    void *arg = call->arg;
-    free(call);
-    fn(arg);
+#define CARD_QUEUE 16
+static DeferredCall s_queue[CARD_QUEUE];
+static int s_queue_head, s_queue_count, s_backup_pending;
+static bool s_drain_scheduled;
+
+static void drain(void) {
+    while (s_queue_count) {
+        DeferredCall call = s_queue[s_queue_head];
+        s_queue_head = (s_queue_head + 1) % CARD_QUEUE;
+        s_queue_count--;
+        if (call.backup) s_backup_pending--;
+        call.fn(call.arg); // may queue the next request of a chain
+    }
 }
 
-static void complete(CARDCallback callback, void *arg, u32 isAsync) {
+static void run_callbacks(void *p) {
+    (void) p;
+    s_drain_scheduled = false;
+    drain();
+}
+
+static void complete(CARDCallback callback, void *arg, u32 isAsync, bool backup) {
     if (!callback) {
         return;
     }
     if (isAsync) {
-        DeferredCall *call = malloc(sizeof(*call));
-        call->fn = callback;
-        call->arg = arg;
-        port_os_defer(run_callback, call);
+        if (s_queue_count == CARD_QUEUE) drain();
+        s_queue[(s_queue_head + s_queue_count) % CARD_QUEUE] = (DeferredCall) {callback, arg, backup};
+        s_queue_count++;
+        if (backup) s_backup_pending++;
+        if (!s_drain_scheduled) {
+            s_drain_scheduled = true;
+            port_os_defer(run_callbacks, NULL);
+        }
     } else {
         callback(arg);
     }
@@ -71,7 +95,7 @@ void CARDi_ReadRom(u32 dma, u32 src, u32 dst, u32 len, CARDCallback callback, vo
         len = src < g_rom_size ? g_rom_size - src : 0;
     }
     memcpy((void *) (uintptr_t) dst, g_rom + src, len);
-    complete(callback, callbackArg, isAsync);
+    complete(callback, callbackArg, isAsync, false);
     port_os_poll(); // file loading is where the DS takes its VBlank interrupts
 }
 
@@ -90,7 +114,9 @@ static void save_load(void) {
 
 void port_save_flush(void) {
     if (!s_save_dirty) return;
-    if (hapi_save_write(s_save, SAVE_SIZE)) s_save_dirty = false;
+    // Cleared first: a write the game makes while the file is being written marks it again for the next flush.
+    s_save_dirty = false;
+    if (!hapi_save_write(s_save, SAVE_SIZE)) s_save_dirty = true;
 }
 
 void CARD_LockBackup(u16 lockId) { (void) lockId; }
@@ -102,8 +128,11 @@ int CARD_IdentifyBackup(s32 type) {
     s_result = BACKUP_RESULT_OK;
     return 1;
 }
-int CARD_WaitBackupAsync(void) { return s_result == BACKUP_RESULT_OK; }
-int CARD_TryWaitBackupAsync(void) { return 1; }
+int CARD_WaitBackupAsync(void) {
+    drain();
+    return s_result == BACKUP_RESULT_OK;
+}
+int CARD_TryWaitBackupAsync(void) { return s_backup_pending == 0; }
 
 // Request types of the backup stream commands.
 enum {
@@ -153,6 +182,6 @@ int CARDi_RequestStreamCommand(u32 src, u32 dst, u32 len, CARDCallback callback,
         s_result = BACKUP_RESULT_NOT_SUPPORTED;
         break;
     }
-    complete(callback, callbackArg, isAsync);
+    complete(callback, callbackArg, isAsync, true);
     return s_result == BACKUP_RESULT_OK;
 }

@@ -20,6 +20,9 @@ final class Native {
 
     static native void setSurface(Surface surface);
 
+    /** A second display's surface (dual-screen devices): the touch screen is drawn there. Null: none. */
+    static native void setSecondSurface(Surface surface);
+
     /** Screen rectangles in surface pixels: top screen, bottom screen (x, y, width, height each). */
     static native void setLayout(int tx, int ty, int tw, int th, int bx, int by, int bw, int bh);
 
@@ -29,6 +32,10 @@ final class Native {
 
     /** The options screen: the largest 3D scale (0 = as the display needs) and frame interpolation above 60 Hz. */
     static native void setGraphics(int maxScale, boolean interpolate);
+
+    /** Races: the map (with the ranking and time) at sizePercent of its usual size (0 hidden), in a corner: 0 lower
+     * right, 1 lower left, 2 upper right, 3 upper left. Menus: 0 both screens side by side, 1 the touch screen alone. */
+    static native void setHud(int sizePercent, int corner, int menuScreens);
 
     /** One screen: where the touch screen's part of the picture is (x, y, w, h in surface pixels; w 0: none). */
     static native void touchRect(float[] out);
